@@ -132,6 +132,6 @@ BondedExecutor 执行 Swap，测量实际输出
 |------|---------------|
 | Researcher / PM | Product scope, promise validity, testing, pitch |
 | Marketing / Ops | Positioning, copy, demos, evidence collection |
-| Dev 1: Contracts | Solidity architecture, testing, deployment, events |
-| Dev 2: Full-stack / Agent | Agent pipeline, simulation, frontend, deployment |
+| Dev: Contracts + Agent Backend | Solidity (Foundry), Go + go-ethereum agent service |
+| Dev: Frontend | React / Next.js, wallet integration, promise card UI |
 | Design | Information hierarchy, promise card, tx status visuals |
