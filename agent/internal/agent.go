@@ -1,0 +1,236 @@
+package internal
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"fmt"
+	"math/big"
+	"time"
+
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/gitgdut/bonded-agent/agent/contracts"
+)
+
+// Agent handles all interactions with Bonded Agent contracts.
+type Agent struct {
+	client  *ethclient.Client
+	chainID *big.Int
+	auth    *bind.TransactOpts
+	address common.Address
+
+	cfg      *Config // needed for contract addresses
+	usdc     *contracts.MockUSDC
+	dex      *contracts.MockDex
+	executor *contracts.BondedExecutor
+}
+
+// ── Initialization ──────────────────────────────────────────
+
+// NewAgent connects to the chain and initializes contract bindings.
+func NewAgent(cfg *Config) (*Agent, error) {
+	client, err := ethclient.Dial(cfg.RPC)
+	if err != nil {
+		return nil, fmt.Errorf("dial RPC %s: %w", cfg.RPC, err)
+	}
+
+	chainID, err := client.ChainID(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("get chain ID: %w", err)
+	}
+
+	privateKey, err := crypto.HexToECDSA(cfg.PrivateKey[2:]) // strip 0x
+	if err != nil {
+		return nil, fmt.Errorf("parse private key: %w", err)
+	}
+
+	auth, err := bind.NewKeyedTransactorWithChainID(privateKey, chainID)
+	if err != nil {
+		return nil, fmt.Errorf("create transactor: %w", err)
+	}
+
+	publicKey := privateKey.Public()
+	publicKeyECDSA, _ := publicKey.(*ecdsa.PublicKey)
+	address := crypto.PubkeyToAddress(*publicKeyECDSA)
+	cfg.Operator = address
+
+	// Bind contracts
+	usdc, err := contracts.NewMockUSDC(cfg.MockUSDC, client)
+	if err != nil {
+		return nil, fmt.Errorf("bind MockUSDC: %w", err)
+	}
+
+	dex, err := contracts.NewMockDex(cfg.MockDex, client)
+	if err != nil {
+		return nil, fmt.Errorf("bind MockDex: %w", err)
+	}
+
+	executor, err := contracts.NewBondedExecutor(cfg.BondedExecutor, client)
+	if err != nil {
+		return nil, fmt.Errorf("bind BondedExecutor: %w", err)
+	}
+
+	return &Agent{
+		client:    client,
+		chainID:   chainID,
+		auth:      auth,
+		address:   address,
+		cfg:       cfg,
+		usdc:      usdc,
+		dex:       dex,
+		executor:  executor,
+	}, nil
+}
+
+// Address returns the operator's Ethereum address.
+func (a *Agent) Address() common.Address {
+	return a.address
+}
+
+// ChainID returns the connected chain ID.
+func (a *Agent) ChainID() *big.Int {
+	return a.chainID
+}
+
+// ── Queries (free, read-only) ───────────────────────────────
+
+// GetRate returns the current MockDex exchange rate (tUSDC per 1 MON, scaled by 1e18).
+func (a *Agent) GetRate() (*big.Int, error) {
+	return a.dex.Rate(nil)
+}
+
+// SimulateSwap computes the expected tUSDC output for a given MON input.
+// Does NOT send a transaction — purely local computation.
+func (a *Agent) SimulateSwap(monAmount *big.Int) (*big.Int, error) {
+	rate, err := a.GetRate()
+	if err != nil {
+		return nil, fmt.Errorf("get rate: %w", err)
+	}
+	// output = monAmount * rate / 1e18
+	output := new(big.Int).Mul(monAmount, rate)
+	output.Div(output, big.NewInt(1e18))
+	return output, nil
+}
+
+// GetPlan retrieves a plan by its ID.
+func (a *Agent) GetPlan(planID [32]byte) (contracts.BondedExecutorPlan, error) {
+	return a.executor.Plans(nil, planID)
+}
+
+// GetUserBalance returns the tUSDC balance of an address.
+func (a *Agent) GetUserBalance(addr common.Address) (*big.Int, error) {
+	return a.usdc.BalanceOf(nil, addr)
+}
+
+// ── Transactions (cost gas) ─────────────────────────────────
+
+// ApproveUSDC approves the BondedExecutor to spend operator's tUSDC.
+func (a *Agent) ApproveUSDC(amount *big.Int) (string, error) {
+	tx, err := a.usdc.Approve(a.auth, a.cfg.BondedExecutor, amount)
+	if err != nil {
+		return "", fmt.Errorf("approve: %w", err)
+	}
+	return tx.Hash().Hex(), nil
+}
+
+// OpenPlan creates a guaranteed plan on the BondedExecutor.
+// Returns (planID, txHash, error).
+func (a *Agent) OpenPlan(
+	user common.Address,
+	inputAmount *big.Int,
+	expectedOutput *big.Int,
+	guaranteedOutput *big.Int,
+	maxCompensation *big.Int,
+	failureCompensation *big.Int,
+	deadline *big.Int,
+) (string, string, error) {
+	// Build calldata: swap(uint256 minOutput) with minOutput=0
+	swapABI, err := contracts.MockDexMetaData.GetAbi()
+	if err != nil {
+		return "", "", fmt.Errorf("get ABI: %w", err)
+	}
+	calldata, err := swapABI.Pack("swap", big.NewInt(0))
+	if err != nil {
+		return "", "", fmt.Errorf("pack calldata: %w", err)
+	}
+	calldataHash := crypto.Keccak256Hash(calldata)
+
+	// Compute planID = keccak256(abi.encode(user, operator, nonce))
+	nonce := big.NewInt(time.Now().UnixNano())
+	planID := computePlanID(user, a.address, nonce)
+
+	// Build plan struct
+	plan := contracts.BondedExecutorPlan{
+		User:                user,
+		Operator:            a.address,
+		InputAmount:         inputAmount,
+		ExpectedOutput:      expectedOutput,
+		GuaranteedOutput:    guaranteedOutput,
+		MaxCompensation:     maxCompensation,
+		FailureCompensation: failureCompensation,
+		Target:              a.cfg.MockDex,
+		CalldataHash:        calldataHash,
+		Deadline:            deadline,
+		Nonce:               nonce,
+		Executed:            false,
+	}
+
+	tx, err := a.executor.OpenPlan(a.auth, planID, plan, calldata)
+	if err != nil {
+		return "", "", fmt.Errorf("openPlan tx: %w", err)
+	}
+
+	return fmt.Sprintf("0x%x", planID), tx.Hash().Hex(), nil
+}
+
+// OpenPlanQuick is a convenience method that auto-computes expectedOutput and guaranteedOutput.
+func (a *Agent) OpenPlanQuick(
+	user common.Address,
+	inputAmount *big.Int,
+	ratio float64,
+) (string, string, *big.Int, error) {
+	expected, err := a.SimulateSwap(inputAmount)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("simulate: %w", err)
+	}
+
+	// guaranteed = expected * ratio
+	guaranteed := new(big.Int).Set(expected)
+	guaranteed.Mul(guaranteed, big.NewInt(int64(ratio*1e9)))
+	guaranteed.Div(guaranteed, big.NewInt(1e9))
+
+	deadline := big.NewInt(time.Now().Unix() + 86400) // 24h
+
+	maxComp, _ := new(big.Int).SetString("20000000000000000000", 10)  // 20 tUSDC
+	failComp, _ := new(big.Int).SetString("5000000000000000000", 10)  // 5 tUSDC
+
+	planID, txHash, err := a.OpenPlan(
+		user, inputAmount, expected, guaranteed,
+		maxComp,  // 20 tUSDC max compensation
+		failComp, // 5 tUSDC failure compensation
+		deadline,
+	)
+
+	return planID, txHash, expected, err
+}
+
+// ── Helpers ─────────────────────────────────────────────────
+
+// computePlanID = keccak256(abi.encode(user, operator, nonce))
+func computePlanID(user, operator common.Address, nonce *big.Int) [32]byte {
+	// abi.encode(address,address,uint256)
+	data := make([]byte, 0, 32+32+32)
+
+	// pad addresses to 32 bytes
+	paddedUser := common.LeftPadBytes(user.Bytes(), 32)
+	paddedOp := common.LeftPadBytes(operator.Bytes(), 32)
+	paddedNonce := common.LeftPadBytes(nonce.Bytes(), 32)
+
+	data = append(data, paddedUser...)
+	data = append(data, paddedOp...)
+	data = append(data, paddedNonce...)
+
+	return crypto.Keccak256Hash(data)
+}
