@@ -124,6 +124,11 @@ func (a *Agent) GetUserBalance(addr common.Address) (*big.Int, error) {
 	return a.usdc.BalanceOf(nil, addr)
 }
 
+// GetMONBalance returns the native MON balance of an address.
+func (a *Agent) GetMONBalance(addr common.Address) (*big.Int, error) {
+	return a.client.BalanceAt(context.Background(), addr, nil)
+}
+
 // ── Transactions (cost gas) ─────────────────────────────────
 
 // ApproveUSDC approves the BondedExecutor to spend operator's tUSDC.

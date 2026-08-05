@@ -127,11 +127,17 @@ func main() {
 		if len(os.Args) >= 3 {
 			addr = common.HexToAddress(os.Args[2])
 		}
-		bal, err := agent.GetUserBalance(addr)
+		monBal, err := agent.GetMONBalance(addr)
 		if err != nil {
-			log.Fatalf("Balance: %v", err)
+			log.Fatalf("MON Balance: %v", err)
 		}
-		fmt.Printf("%s: %s tUSDC\n", addr.Hex(), formatToken(bal))
+		usdcBal, err := agent.GetUserBalance(addr)
+		if err != nil {
+			log.Fatalf("tUSDC Balance: %v", err)
+		}
+		fmt.Printf("%s:\n", addr.Hex())
+		fmt.Printf("  MON:   %s\n", formatEther(monBal))
+		fmt.Printf("  tUSDC: %s\n", formatToken(usdcBal))
 
 	case "execute":
 		if len(os.Args) < 3 {
