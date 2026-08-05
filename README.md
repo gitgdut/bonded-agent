@@ -150,3 +150,14 @@ BondedExecutor 执行 Swap，测量实际输出
 | Dev: Contracts + Agent Backend | Solidity (Foundry), Go + go-ethereum agent service |
 | Dev: Frontend | React / Next.js, wallet integration, promise card UI |
 | Design | Information hierarchy, promise card, tx status visuals |
+
+## Branch Strategy
+
+```
+master       ← 稳定可部署（当前 v0.1.0）
+develop      ← 开发集成
+feat/xxx     ← 新功能分支（从 develop 切，PR 回 develop）
+fix/xxx      ← 修 bug（从 master 切，cherry-pick 回 develop）
+```
+
+日常开发不要直接推 master。PR 至少一人 review 后合并。
