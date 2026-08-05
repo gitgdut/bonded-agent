@@ -150,6 +150,11 @@ func main() {
 		}
 		fmt.Printf("Plan executed ✓\nTx: %s\n", txHash)
 
+	case "serve":
+		if err := agent.ServeAPI(":8787"); err != nil {
+			log.Fatalf("Serve: %v", err)
+		}
+
 	default:
 		fmt.Printf("Unknown command: %s\n", cmd)
 		printUsage()
@@ -175,6 +180,7 @@ Usage:
   agent approve <amount|max>      Approve USDC for BondedExecutor
   agent plan <user> <MON> [0.90]  Open a guaranteed plan
   agent execute <planID>          Execute a plan
+  agent serve                     Start HTTP API on :8787
   agent get-plan <planID>         Read a plan
   agent balance [addr]            Check tUSDC balance
 
