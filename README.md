@@ -124,6 +124,21 @@ BondedExecutor 执行 Swap，测量实际输出
 
 ---
 
+## Monad Testnet Deployment
+
+| Contract | Address |
+|----------|---------|
+| MockUSDC | [`0xD5B1b42929188280631ef2502c78AA61e1A56e0a`](https://testnet.monadscan.com/address/0xD5B1b42929188280631ef2502c78AA61e1A56e0a) |
+| MockDex | [`0x57dB71757893eE968197B80faB991F16086ec55e`](https://testnet.monadscan.com/address/0x57dB71757893eE968197B80faB991F16086ec55e) |
+| BondedExecutor | [`0x5F9C61C6ff535245f8A8112F9BAcf82b39Ee25D0`](https://testnet.monadscan.com/address/0x5F9C61C6ff535245f8A8112F9BAcf82b39Ee25D0) |
+
+**Verified scenarios (see [deploy-monad-testnet.md](deploy-monad-testnet.md)):**
+
+| Scenario | Result | Tx |
+|----------|--------|-----|
+| Normal (actual ≥ guaranteed) | ✅ Bond released, 0 compensation | `0x94086a...fd30` |
+| Shortfall (actual < guaranteed) | 🔴 20 tUSDC auto-paid | `0xe1a468...a1c4` |
+
 ## Team
 
 **Backchannel** — Monad Playground Hackathon
