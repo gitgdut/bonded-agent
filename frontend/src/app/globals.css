@@ -1,0 +1,208 @@
+@import "tailwindcss";
+
+/* ============================================================
+ * Bonded Agent 紫黑科技金融风主题
+ * 对应《Bonded-Agent-frontend-design.md》§10
+ * ============================================================ */
+
+@theme {
+  /* 背景与层级 */
+  --color-bg: #0b0612;
+  --color-bg-elevated: #150e22;
+  --color-bg-elevated-2: #1d1430;
+  --color-border: #2c1f45;
+
+  /* 主色(紫) */
+  --color-primary: #8b5cf6;
+  --color-primary-strong: #7c3aed;
+  --color-primary-soft: rgba(139, 92, 246, 0.16);
+
+  /* 科技点缀(青) */
+  --color-accent-tech: #22d3ee;
+
+  /* 金融金(保证金/保证输出) */
+  --color-bond: #f59e0b;
+
+  /* 状态语义 */
+  --color-positive: #34d399;
+  --color-shortfall: #fb923c;
+  --color-failed: #f87171;
+  --color-neutral: #9ca3af;
+
+  /* 文字 */
+  --color-text-primary: #f4efff;
+  --color-text-secondary: #a9a0bd;
+  --color-text-muted: #6e6580;
+
+  /* 字体 */
+  --font-sans: ui-sans-serif, system-ui, "Inter", "PingFang SC",
+    "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "IBM Plex Mono",
+    "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+}
+
+/* ---------- 基础 ---------- */
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  min-height: 100vh;
+}
+
+/* 背景网格 + 顶部紫靛光晕(科技感) */
+.bg-grid {
+  background-image:
+    linear-gradient(rgba(139, 92, 246, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(139, 92, 246, 0.05) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.bg-aurora {
+  background:
+    radial-gradient(600px 240px at 50% -80px, rgba(124, 58, 237, 0.28), transparent 70%),
+    radial-gradient(900px 320px at 85% -120px, rgba(34, 211, 238, 0.10), transparent 70%),
+    var(--color-bg);
+}
+
+/* ---------- 玻璃卡片 ---------- */
+
+.glass-card {
+  background-color: rgba(21, 14, 34, 0.72);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.45),
+    0 0 24px rgba(139, 92, 246, 0.08);
+}
+
+/* 不支持 backdrop-filter 的兜底 */
+@supports not ((backdrop-filter: blur(12px)) or (-webkit-backdrop-filter: blur(12px))) {
+  .glass-card {
+    background-color: var(--color-bg-elevated);
+  }
+}
+
+/* ---------- 主按钮(紫→靛渐变) ---------- */
+
+.btn-primary {
+  background-image: linear-gradient(135deg, #8b5cf6, #6366f1);
+  color: #ffffff;
+  border-radius: 8px;
+  transition: box-shadow 0.2s ease, transform 0.2s ease, opacity 0.2s ease;
+}
+.btn-primary:hover:not(:disabled) {
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.45);
+  transform: translateY(-1px);
+}
+.btn-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+/* ---------- 次按钮 ---------- */
+
+.btn-secondary {
+  background-color: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  border-radius: 8px;
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+.btn-secondary:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ---------- 金额发光 ---------- */
+
+.text-glow-bond {
+  color: var(--color-bond);
+  text-shadow: 0 0 12px rgba(245, 158, 11, 0.35);
+}
+
+/* ---------- 状态灯呼吸 ---------- */
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  display: inline-block;
+}
+.status-dot-pulse {
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+/* ---------- 数据流动线 ---------- */
+
+@keyframes data-flow {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+.data-flow-line {
+  height: 2px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-accent-tech),
+    transparent
+  );
+  background-size: 200% 100%;
+  animation: data-flow 2.4s linear infinite;
+}
+
+/* ---------- 骨架屏 ---------- */
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(21, 14, 34, 0.9) 25%,
+    rgba(139, 92, 246, 0.18) 50%,
+    rgba(21, 14, 34, 0.9) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s infinite;
+  border-radius: 8px;
+}
+
+/* ---------- 数字等宽防跳动 ---------- */
+
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 滚动条(暗色) ---------- */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2c1f45;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
