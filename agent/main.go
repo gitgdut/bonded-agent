@@ -133,6 +133,17 @@ func main() {
 		}
 		fmt.Printf("%s: %s tUSDC\n", addr.Hex(), formatToken(bal))
 
+	case "execute":
+		if len(os.Args) < 3 {
+			log.Fatal("Usage: agent execute <planID>")
+		}
+		planID := [32]byte(common.HexToHash(os.Args[2]))
+		txHash, err := agent.ExecutePlan(planID)
+		if err != nil {
+			log.Fatalf("Execute: %v", err)
+		}
+		fmt.Printf("Plan executed ✓\nTx: %s\n", txHash)
+
 	default:
 		fmt.Printf("Unknown command: %s\n", cmd)
 		printUsage()
@@ -157,6 +168,7 @@ Usage:
   agent simulate <MON>            Simulate swap output (e.g. "1.5")
   agent approve <amount|max>      Approve USDC for BondedExecutor
   agent plan <user> <MON> [0.90]  Open a guaranteed plan
+  agent execute <planID>          Execute a plan
   agent get-plan <planID>         Read a plan
   agent balance [addr]            Check tUSDC balance
 

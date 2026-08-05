@@ -218,6 +218,42 @@ func (a *Agent) OpenPlanQuick(
 
 // ── Helpers ─────────────────────────────────────────────────
 
+// ExecutePlan executes a plan as the user.
+// Sends plan.InputAmount MON and the matching calldata.
+func (a *Agent) ExecutePlan(planID [32]byte) (string, error) {
+	plan, err := a.executor.Plans(nil, planID)
+	if err != nil {
+		return "", fmt.Errorf("get plan: %w", err)
+	}
+	if plan.Executed {
+		return "", fmt.Errorf("plan already executed")
+	}
+	if plan.Operator == (common.Address{}) {
+		return "", fmt.Errorf("plan not found")
+	}
+
+	// Build calldata matching what OpenPlan stored (swap(0))
+	swapABI, err := contracts.MockDexMetaData.GetAbi()
+	if err != nil {
+		return "", fmt.Errorf("get ABI: %w", err)
+	}
+	calldata, err := swapABI.Pack("swap", big.NewInt(0))
+	if err != nil {
+		return "", fmt.Errorf("pack calldata: %w", err)
+	}
+
+	// Create auth with value = plan.InputAmount
+	auth := *a.auth // shallow copy
+	auth.Value = new(big.Int).Set(plan.InputAmount)
+
+	tx, err := a.executor.ExecutePlan(&auth, planID, calldata)
+	if err != nil {
+		return "", fmt.Errorf("executePlan tx: %w", err)
+	}
+
+	return tx.Hash().Hex(), nil
+}
+
 // computePlanID = keccak256(abi.encode(user, operator, nonce))
 func computePlanID(user, operator common.Address, nonce *big.Int) [32]byte {
 	// abi.encode(address,address,uint256)
