@@ -28,6 +28,7 @@ type createPlanRequest struct {
 	InputAmount     string `json:"inputAmount"`
 	ExpectedOutput  string `json:"expectedOutput"`
 	DeadlineMinutes int    `json:"deadlineMinutes"`
+	UserAddress     string `json:"userAddress"`
 }
 
 type createPlanResponse struct {
@@ -58,6 +59,14 @@ type planResponse struct {
 	Refunded            bool     `json:"refunded"`
 	BondReleased        bool     `json:"bondReleased"`
 	UpdatedAt           int64    `json:"updatedAt"`
+}
+
+type planSettlement struct {
+	status         string // "settled_ok" | "settled_shortfall" | "failed"
+	actualOutput   string
+	shortfallPaid  string
+	compensation   string
+	refunded       bool
 }
 
 type apiError struct {
@@ -139,8 +148,13 @@ func (a *Agent) handlePlans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use the default guarantee ratio from config
-	planID, txHash, expected, err := a.OpenPlanQuick(a.address, inputAmount, a.cfg.DefaultGuaranteeRatio)
+	// Use the user address from the request frontend, falling back to operator
+	user := a.address
+	if req.UserAddress != "" {
+		user = common.HexToAddress(req.UserAddress)
+	}
+
+	planID, txHash, expected, err := a.OpenPlanQuick(user, inputAmount, a.cfg.DefaultGuaranteeRatio)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "CREATE_FAILED", err.Error())
 		return
@@ -153,8 +167,7 @@ func (a *Agent) handlePlans(w http.ResponseWriter, r *http.Request) {
 
 	deadline := time.Now().Add(time.Duration(a.cfg.DefaultDeadlineSeconds) * time.Second)
 
-	// Build calldata hash (swap(0), same as OpenPlan uses)
-	calldataHash := "0x" // simplified; frontend doesn't validate this
+	calldataHash := ""
 	if h, err := a.getCalldataHash(); err == nil {
 		calldataHash = h
 	}
@@ -198,13 +211,15 @@ func (a *Agent) handlePlanByID(w http.ResponseWriter, r *http.Request) {
 
 	// Determine status
 	status := "open"
+	var settlement planSettlement
 	if plan.Executed {
-		status = "settled_ok" // simplified: cannot distinguish shortfall without event parsing
+		settlement = a.queryPlanSettlement(planID)
+		status = settlement.status
 	} else if time.Now().Unix() > plan.Deadline.Int64() {
 		status = "expired"
 	}
 
-	writeJSON(w, http.StatusOK, planResponse{
+	resp := planResponse{
 		PlanID:              fmt.Sprintf("0x%x", planID),
 		Status:              status,
 		User:                plan.User.Hex(),
@@ -215,8 +230,76 @@ func (a *Agent) handlePlanByID(w http.ResponseWriter, r *http.Request) {
 		FailureCompensation: plan.FailureCompensation.String(),
 		Deadline:            plan.Deadline.Int64() * 1000,
 		TxHashes:            []string{},
+		ActualOutput:        settlement.actualOutput,
+		ShortfallPaid:       settlement.shortfallPaid,
+		Compensation:        settlement.compensation,
+		Refunded:            settlement.refunded,
+		BondReleased:        plan.Executed,
 		UpdatedAt:           time.Now().UnixMilli(),
-	})
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// ── Settlement query helpers ────────────────────────────────
+
+// queryPlanSettlement looks up on-chain events to determine the
+// actual outcome of an executed plan.
+func (a *Agent) queryPlanSettlement(planID [32]byte) planSettlement {
+	var s planSettlement
+	s.status = "settled_ok" // default
+
+	// Check PlanFailed first — if the swap reverted, this event was emitted
+	failedIter, err := a.executor.FilterPlanFailed(nil, [][32]byte{planID})
+	if err == nil {
+		defer failedIter.Close()
+		for failedIter.Next() {
+			ev := failedIter.Event
+			s.status = "failed"
+			s.refunded = true
+			if ev.CompensationPaid != nil {
+				s.compensation = ev.CompensationPaid.String()
+			}
+		}
+	}
+
+	// If already determined as failed, we're done
+	if s.status == "failed" {
+		return s
+	}
+
+	// Check PlanExecuted — always emitted when the swap call succeeds
+	execIter, err := a.executor.FilterPlanExecuted(nil, [][32]byte{planID})
+	if err == nil {
+		defer execIter.Close()
+		for execIter.Next() {
+			ev := execIter.Event
+			if ev.ActualOutput != nil {
+				s.actualOutput = ev.ActualOutput.String()
+			}
+			// If paidToUser > 0, there was a shortfall
+			if ev.PaidToUser != nil && ev.PaidToUser.Sign() > 0 {
+				s.status = "settled_shortfall"
+				s.compensation = ev.PaidToUser.String()
+			}
+		}
+	}
+
+	// If shortfall, also look up the ShortfallPaid event for exact shortfall amount
+	if s.status == "settled_shortfall" {
+		shortIter, err := a.executor.FilterShortfallPaid(nil, [][32]byte{planID})
+		if err == nil {
+			defer shortIter.Close()
+			for shortIter.Next() {
+				ev := shortIter.Event
+				if ev.Shortfall != nil {
+					s.shortfallPaid = ev.Shortfall.String()
+				}
+			}
+		}
+	}
+
+	return s
 }
 
 // ── Helpers ─────────────────────────────────────────────────

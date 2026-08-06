@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/joho/godotenv"
 )
 
 // Config holds all deployment parameters, loaded from environment variables.
@@ -31,6 +32,10 @@ type Config struct {
 
 // LoadConfig reads configuration from environment variables with sensible defaults.
 func LoadConfig() *Config {
+	// Auto-load .env file — no need to source manually
+	_ = godotenv.Load(".env")
+	_ = godotenv.Load("../.env") // also try project root
+
 	cfg := &Config{
 		RPC:        getEnv("MONAD_RPC", "http://127.0.0.1:8545"),
 		PrivateKey: getEnv("OPERATOR_PRIVATE_KEY", "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"),

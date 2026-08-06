@@ -30,6 +30,7 @@ export interface CreatePlanRequest {
   inputAmount: string; // wei
   expectedOutput: string; // wei
   deadlineMinutes: number;
+  userAddress: string; // 用户钱包地址，由后端写入 plan.user
 }
 
 /** POST /plans 响应 */

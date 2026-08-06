@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { parseEther } from "viem";
+import { useAccount } from "wagmi";
 import {
   fetchQuote,
   createPlan,
@@ -16,18 +16,20 @@ import { derivePlanStatus } from "@/lib/plan-status";
 export function useQuote(inputAmount?: string, enabled = false) {
   return useQuery<Quote>({
     queryKey: ["quote", inputAmount],
-    queryFn: () => fetchQuote(parseEther(inputAmount as `${number}`).toString()),
+    queryFn: () => fetchQuote(inputAmount!),
     enabled: enabled && !!inputAmount,
     staleTime: 30_000,
     retry: 1,
   });
 }
 
-/** 创建担保计划并跳转到计划页 */
+/** 创建担保计划并跳转到计划页。自动注入当前连接的钱包地址。 */
 export function useCreatePlan() {
   const router = useRouter();
+  const { address } = useAccount();
   return useMutation({
-    mutationFn: (req: CreatePlanRequest) => createPlan(req),
+    mutationFn: (req: Omit<CreatePlanRequest, "userAddress">) =>
+      createPlan({ ...req, userAddress: address ?? "" }),
     onSuccess: (res) => {
       router.push(`/plans/${encodeURIComponent(res.planId)}`);
     },

@@ -2,10 +2,10 @@
 
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useAccount } from "wagmi";
 import { usePlan } from "@/hooks/useQuote";
-import { useExecutePlan, type ExecuteResult } from "@/hooks/useExecutePlan";
+import { useExecutePlan } from "@/hooks/useExecutePlan";
 import { PromiseCard } from "@/components/plan/PromiseCard";
 import { SettlementExplanation } from "@/components/plan/SettlementExplanation";
 import { ErrorBanner } from "@/components/ui/ErrorBanner";
@@ -16,19 +16,18 @@ import { PLAN } from "@/lib/copy";
 import { USE_MOCK } from "@/lib/config";
 import type { Plan } from "@/lib/types";
 
-/** 计划页:承诺卡片 + 执行 + 结算(文档 §6.2) */
+/** Plan page: promise card + execute + settlement (doc §6.2) */
 export default function PlanPage() {
   const params = useParams<{ id: string }>();
   const planId = params?.id;
 
   const { plan, status, isLoading, error } = usePlan(planId);
   const { address } = useAccount();
-  const { execute, isConfirming } = useExecutePlan(plan);
+  const { execute, isConfirming, result: execResult } = useExecutePlan(plan);
 
-  const [execResult, setExecResult] = useState<ExecuteResult>();
   const [execError, setExecError] = useState<unknown>();
 
-  // 钱包校验:演示模式跳过;真实模式校验计划归属
+  // Wallet check: skip in demo mode; in real mode verify plan ownership
   const wrongWallet =
     !USE_MOCK &&
     !!plan &&
@@ -36,24 +35,35 @@ export default function PlanPage() {
     !!plan.user &&
     plan.user.toLowerCase() !== address.toLowerCase();
 
-  // 执行成功后合并结算结果,驱动结算区渲染
-  const displayPlan: Plan | undefined = plan
-    ? {
-        ...plan,
-        status: (execResult?.status ?? status) as Plan["status"],
-        actualOutput: execResult?.actualOutput ?? plan.actualOutput,
-        shortfallPaid: execResult?.shortfallPaid ?? plan.shortfallPaid,
-        txHashes: execResult?.txHash
-          ? [...plan.txHashes, execResult.txHash]
-          : plan.txHashes,
-      }
-    : undefined;
+  // Merge the reactive execution result with backend plan data.
+  // Only trust execResult for final statuses (not "executing").
+  // For "executing", show the backend-derived status as fallback.
+  const displayPlan: Plan | undefined = useMemo(() => {
+    if (!plan) return undefined;
+
+    const finalStatus = execResult?.status;
+    const isFinal =
+      finalStatus === "settled_ok" ||
+      finalStatus === "settled_shortfall" ||
+      finalStatus === "failed";
+
+    return {
+      ...plan,
+      // Only override status with final on-chain results; otherwise trust backend
+      status: (isFinal ? finalStatus : status) as Plan["status"],
+      actualOutput: execResult?.actualOutput ?? plan.actualOutput,
+      shortfallPaid: execResult?.shortfallPaid ?? plan.shortfallPaid,
+      compensation: execResult?.compensation ?? plan.compensation,
+      txHashes: execResult?.txHash
+        ? [...plan.txHashes, execResult.txHash]
+        : plan.txHashes,
+    };
+  }, [plan, execResult, status]);
 
   const handleExecute = async () => {
     setExecError(undefined);
     try {
-      const result = await execute();
-      setExecResult(result);
+      await execute();
     } catch (e) {
       setExecError(e);
     }
@@ -87,7 +97,7 @@ export default function PlanPage() {
       <PromiseCard
         plan={displayPlan}
         status={displayPlan.status}
-        executing={isConfirming}
+        executing={isConfirming || execResult?.status === "executing"}
         wrongWallet={wrongWallet}
         onExecute={handleExecute}
       />
