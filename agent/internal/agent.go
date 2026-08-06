@@ -196,8 +196,23 @@ func (a *Agent) OpenPlanQuick(
 		return "", "", nil, fmt.Errorf("simulate: %w", err)
 	}
 
-	// guaranteed = expected * ratio
-	guaranteed := new(big.Int).Set(expected)
+	// Query current service fee (basis points)
+	feeBps, err := a.executor.ServiceFeeBps(nil)
+	if err != nil {
+		feeBps = big.NewInt(0) // fallback: no fee
+	}
+
+	// netExpected = expected * (10000 - feeBps) / 10000
+	// This is what the user actually receives after fee deduction
+	netExpected := new(big.Int).Set(expected)
+	if feeBps.Sign() > 0 {
+		feeFree := new(big.Int).Sub(big.NewInt(10000), feeBps)
+		netExpected.Mul(netExpected, feeFree)
+		netExpected.Div(netExpected, big.NewInt(10000))
+	}
+
+	// guaranteed = netExpected * ratio
+	guaranteed := new(big.Int).Set(netExpected)
 	guaranteed.Mul(guaranteed, big.NewInt(int64(ratio*1e9)))
 	guaranteed.Div(guaranteed, big.NewInt(1e9))
 
@@ -213,7 +228,7 @@ func (a *Agent) OpenPlanQuick(
 		deadline,
 	)
 
-	return planID, txHash, expected, err
+	return planID, txHash, netExpected, err
 }
 
 // ── Helpers ─────────────────────────────────────────────────

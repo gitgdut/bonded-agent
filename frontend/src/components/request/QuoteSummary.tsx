@@ -51,6 +51,12 @@ export function QuoteSummary({
             {QUOTE.minutes(DEFAULT_DEADLINE_MINUTES)}
           </dd>
         </div>
+        <div>
+          <dt className="text-xs text-text-muted">{QUOTE.serviceFee}</dt>
+          <dd className="mt-1 text-sm text-text-primary">
+            <AmountToken value={((BigInt(quote.expectedOutput) * 30n) / 10000n).toString()} token={OUTPUT_TOKEN} />
+          </dd>
+        </div>
       </dl>
 
       <div className="data-flow-line" aria-hidden />

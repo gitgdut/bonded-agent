@@ -154,14 +154,14 @@ func (a *Agent) handlePlans(w http.ResponseWriter, r *http.Request) {
 		user = common.HexToAddress(req.UserAddress)
 	}
 
-	planID, txHash, expected, err := a.OpenPlanQuick(user, inputAmount, a.cfg.DefaultGuaranteeRatio)
+	planID, txHash, netExpected, err := a.OpenPlanQuick(user, inputAmount, a.cfg.DefaultGuaranteeRatio)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "CREATE_FAILED", err.Error())
 		return
 	}
 
-	// Compute guaranteed and deadline for response
-	guaranteed := new(big.Int).Set(expected)
+	// guaranteed = netExpected * ratio (already computed in OpenPlanQuick)
+	guaranteed := new(big.Int).Set(netExpected)
 	guaranteed.Mul(guaranteed, big.NewInt(int64(a.cfg.DefaultGuaranteeRatio*1e9)))
 	guaranteed.Div(guaranteed, big.NewInt(1e9))
 

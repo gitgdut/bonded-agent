@@ -14,7 +14,7 @@ export const COPY = {
   tagline: "Agent 运营方为交易结果锁定保证金,结果不足自动赔付",
   footer: [
     "运行于 Monad Testnet",
-    "当前市场为模拟(MockDex),非真实 DEX",
+    "AMM 恒积做市 (SimpleAMMPair)",
     "测试资产,无真实价值",
   ] as const,
   connectWallet: "连接钱包",
@@ -51,6 +51,7 @@ export const QUOTE = {
   bondLocked: "运营方锁定保证金",
   validity: "有效期预览",
   rate: "模拟汇率",
+  serviceFee: "服务费 (0.3%)",
   minutes: (n: number) => `约 ${n} 分钟`,
 } as const;
 

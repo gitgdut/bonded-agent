@@ -14,6 +14,9 @@ import {MockUSDC} from "./MockUSDC.sol";
 contract BondedExecutor {
     MockUSDC public immutable tUSDC;
 
+    /// @notice Service fee in basis points (e.g., 30 = 0.3%)
+    uint256 public serviceFeeBps;
+
     // ── Plan structure ──────────────────────────────────────────
     struct Plan {
         address user;              // who can execute
@@ -74,6 +77,15 @@ contract BondedExecutor {
         address indexed operator,
         uint256 amount
     );
+
+    event ServiceFeePaid(
+        bytes32 indexed planId,
+        uint256 swapOutput,
+        uint256 fee,
+        uint256 userReceived
+    );
+
+    event ServiceFeeUpdated(uint256 oldFeeBps, uint256 newFeeBps);
 
     // ── Errors ───────────────────────────────────────────────────
     error NotPlanUser();
@@ -166,18 +178,28 @@ contract BondedExecutor {
             uint256 balanceAfter = tUSDC.balanceOf(address(this));
             uint256 actualOutput = balanceAfter - balanceBefore;
 
-            // Forward received tUSDC to user
-            if (actualOutput > 0) {
-                require(tUSDC.transfer(plan.user, actualOutput), "output transfer failed");
+            // ── Deduct service fee ────────────────────────────
+            uint256 fee = (actualOutput * serviceFeeBps) / 10000;
+            uint256 userAmount = actualOutput - fee;
+
+            // Forward user's share
+            if (userAmount > 0) {
+                require(tUSDC.transfer(plan.user, userAmount), "output transfer failed");
             }
 
-            if (actualOutput >= plan.guaranteedOutput) {
+            // Pay service fee to operator
+            if (fee > 0) {
+                require(tUSDC.transfer(plan.operator, fee), "fee transfer failed");
+            }
+
+            if (userAmount >= plan.guaranteedOutput) {
                 // ── Normal: bond fully released ────────────────
                 _releaseBond(planId, plan);
+                emit ServiceFeePaid(planId, actualOutput, fee, userAmount);
                 emit PlanExecuted(planId, actualOutput, 0);
             } else {
                 // ── Shortfall: compensate the difference ───────
-                uint256 shortfall = plan.guaranteedOutput - actualOutput;
+                uint256 shortfall = plan.guaranteedOutput - userAmount;
                 uint256 compensation = shortfall > plan.maxCompensation
                     ? plan.maxCompensation
                     : shortfall;
@@ -194,7 +216,8 @@ contract BondedExecutor {
                     require(tUSDC.transfer(plan.operator, remaining), "bond release failed");
                 }
 
-                emit ShortfallPaid(planId, plan.guaranteedOutput, actualOutput, compensation);
+                emit ShortfallPaid(planId, plan.guaranteedOutput, userAmount, compensation);
+                emit ServiceFeePaid(planId, actualOutput, fee, userAmount);
                 emit PlanExecuted(planId, actualOutput, compensation);
             }
         } else {
@@ -232,6 +255,19 @@ contract BondedExecutor {
         _releaseBond(planId, plan);
     }
 
+    // ── Admin ───────────────────────────────────────────────────
+
+    /// @notice Operator sets the service fee in basis points (e.g., 30 = 0.3%).
+    ///         Max allowed: 100 (= 1%).
+    function setServiceFee(uint256 _feeBps) external {
+        // Only contract deployer / known operator
+        // Open for now — in production restrict to operator
+        if (_feeBps > 100) revert FeeTooHigh();
+        uint256 old = serviceFeeBps;
+        serviceFeeBps = _feeBps;
+        emit ServiceFeeUpdated(old, _feeBps);
+    }
+
     // ── Internal ──────────────────────────────────────────────
 
     function _releaseBond(bytes32 planId, Plan storage plan) internal {
@@ -242,6 +278,7 @@ contract BondedExecutor {
     }
 
     error Unauthorized();
+    error FeeTooHigh();
 
     // ── Fallback ──────────────────────────────────────────────
     receive() external payable {}
