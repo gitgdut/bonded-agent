@@ -17,7 +17,7 @@ type Config struct {
 
 	// Contract addresses
 	MockUSDC       common.Address
-	MockDex        common.Address
+	DexAddr        common.Address // DEX (MockDex or SimpleAMMPair)
 	BondedExecutor common.Address
 
 	// Operator parameters
@@ -41,7 +41,7 @@ func LoadConfig() *Config {
 		PrivateKey: getEnv("OPERATOR_PRIVATE_KEY", "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"),
 
 		MockUSDC:       common.HexToAddress(getEnv("USDC_ADDR", "")),
-		MockDex:        common.HexToAddress(getEnv("DEX_ADDR", "")),
+		DexAddr:        common.HexToAddress(getEnv("DEX_ADDR", "")),
 		BondedExecutor: common.HexToAddress(getEnv("EXECUTOR_ADDR", "")),
 
 		DefaultGuaranteeRatio:  parseFloat(getEnv("GUARANTEE_RATIO", "0.90")),
@@ -58,7 +58,7 @@ func (c *Config) Validate() error {
 	if c.MockUSDC == (common.Address{}) {
 		return fmt.Errorf("USDC_ADDR not set")
 	}
-	if c.MockDex == (common.Address{}) {
+	if c.DexAddr == (common.Address{}) {
 		return fmt.Errorf("DEX_ADDR not set")
 	}
 	if c.BondedExecutor == (common.Address{}) {

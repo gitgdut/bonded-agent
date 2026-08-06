@@ -175,7 +175,7 @@ Bonded Agent CLI — operator tool for the BondedExecutor protocol.
 
 Usage:
   agent info                      Show chain + operator info
-  agent rate                      Get current MockDex rate
+  agent rate                      Get current DEX rate (AMM quote)
   agent simulate <MON>            Simulate swap output (e.g. "1.5")
   agent approve <amount|max>      Approve USDC for BondedExecutor
   agent plan <user> <MON> [0.90]  Open a guaranteed plan
@@ -188,7 +188,7 @@ Env vars:
   MONAD_RPC              RPC URL (default: http://127.0.0.1:8545)
   OPERATOR_PRIVATE_KEY   Operator private key (default: anvil #0)
   USDC_ADDR              MockUSDC address
-  DEX_ADDR               MockDex address
+  DEX_ADDR               SimpleAMMPair / DEX address
   EXECUTOR_ADDR          BondedExecutor address
   GUARANTEE_RATIO        Default guarantee ratio (default: 0.90)
 	`))

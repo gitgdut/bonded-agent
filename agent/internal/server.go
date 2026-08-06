@@ -178,7 +178,7 @@ func (a *Agent) handlePlans(w http.ResponseWriter, r *http.Request) {
 		MaxCompensation:     a.cfg.DefaultMaxCompensation.String(),
 		FailureCompensation: a.cfg.DefaultFailureComp.String(),
 		Deadline:            deadline.UnixMilli(),
-		Target:              a.cfg.MockDex.Hex(),
+		Target:              a.cfg.DexAddr.Hex(),
 		CalldataHash:        calldataHash,
 		TxHash:              txHash,
 	})
@@ -305,7 +305,7 @@ func (a *Agent) queryPlanSettlement(planID [32]byte) planSettlement {
 // ── Helpers ─────────────────────────────────────────────────
 
 func (a *Agent) getCalldataHash() (string, error) {
-	swapABI, err := contracts.MockDexMetaData.GetAbi()
+	swapABI, err := contracts.SimpleAMMPairMetaData.GetAbi()
 	if err != nil {
 		return "", err
 	}

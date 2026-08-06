@@ -23,7 +23,7 @@ type Agent struct {
 
 	cfg      *Config // needed for contract addresses
 	usdc     *contracts.MockUSDC
-	dex      *contracts.MockDex
+	dex      *contracts.SimpleAMMPair
 	executor *contracts.BondedExecutor
 }
 
@@ -62,9 +62,9 @@ func NewAgent(cfg *Config) (*Agent, error) {
 		return nil, fmt.Errorf("bind MockUSDC: %w", err)
 	}
 
-	dex, err := contracts.NewMockDex(cfg.MockDex, client)
+	dex, err := contracts.NewSimpleAMMPair(cfg.DexAddr, client)
 	if err != nil {
-		return nil, fmt.Errorf("bind MockDex: %w", err)
+		return nil, fmt.Errorf("bind SimpleAMMPair: %w", err)
 	}
 
 	executor, err := contracts.NewBondedExecutor(cfg.BondedExecutor, client)
@@ -96,22 +96,17 @@ func (a *Agent) ChainID() *big.Int {
 
 // ── Queries (free, read-only) ───────────────────────────────
 
-// GetRate returns the current MockDex exchange rate (tUSDC per 1 MON, scaled by 1e18).
+// GetRate returns the estimated exchange rate (tUSDC per 1 MON).
+// Uses the AMM formula: queries getAmountOut(1 MON) from the pool.
 func (a *Agent) GetRate() (*big.Int, error) {
-	return a.dex.Rate(nil)
+	oneMON := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	return a.dex.GetAmountOut(nil, oneMON)
 }
 
 // SimulateSwap computes the expected tUSDC output for a given MON input.
-// Does NOT send a transaction — purely local computation.
+// Uses the AMM constant-product formula (read-only call).
 func (a *Agent) SimulateSwap(monAmount *big.Int) (*big.Int, error) {
-	rate, err := a.GetRate()
-	if err != nil {
-		return nil, fmt.Errorf("get rate: %w", err)
-	}
-	// output = monAmount * rate / 1e18
-	output := new(big.Int).Mul(monAmount, rate)
-	output.Div(output, big.NewInt(1e18))
-	return output, nil
+	return a.dex.GetAmountOut(nil, monAmount)
 }
 
 // GetPlan retrieves a plan by its ID.
@@ -152,7 +147,7 @@ func (a *Agent) OpenPlan(
 	deadline *big.Int,
 ) (string, string, error) {
 	// Build calldata: swap(uint256 minOutput) with minOutput=0
-	swapABI, err := contracts.MockDexMetaData.GetAbi()
+	swapABI, err := contracts.SimpleAMMPairMetaData.GetAbi()
 	if err != nil {
 		return "", "", fmt.Errorf("get ABI: %w", err)
 	}
@@ -175,7 +170,7 @@ func (a *Agent) OpenPlan(
 		GuaranteedOutput:    guaranteedOutput,
 		MaxCompensation:     maxCompensation,
 		FailureCompensation: failureCompensation,
-		Target:              a.cfg.MockDex,
+		Target:              a.cfg.DexAddr,
 		CalldataHash:        calldataHash,
 		Deadline:            deadline,
 		Nonce:               nonce,
@@ -238,7 +233,7 @@ func (a *Agent) ExecutePlan(planID [32]byte) (string, error) {
 	}
 
 	// Build calldata matching what OpenPlan stored (swap(0))
-	swapABI, err := contracts.MockDexMetaData.GetAbi()
+	swapABI, err := contracts.SimpleAMMPairMetaData.GetAbi()
 	if err != nil {
 		return "", fmt.Errorf("get ABI: %w", err)
 	}
