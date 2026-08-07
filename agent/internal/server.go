@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -67,6 +68,11 @@ type planSettlement struct {
 	shortfallPaid  string
 	compensation   string
 	refunded       bool
+}
+
+type executeSignedRequest struct {
+	Signature string `json:"signature"` // hex-encoded 65-byte EIP-712 signature
+	Deadline  int64  `json:"deadline"`  // unix seconds
 }
 
 type apiError struct {
@@ -185,17 +191,27 @@ func (a *Agent) handlePlans(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) handlePlanByID(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "仅支持 GET")
-		return
-	}
+	// Extract planId from /plans/<id> or /plans/<id>/execute-signed
+	path := strings.TrimPrefix(r.URL.Path, "/plans/")
+	path = strings.TrimSuffix(path, "/execute-signed")
 
-	// Extract planId from /plans/<id>
-	id := strings.TrimPrefix(r.URL.Path, "/plans/")
-	if id == "" {
+	if path == "" {
 		writeError(w, http.StatusBadRequest, "MISSING_ID", "缺少 planId")
 		return
 	}
+
+	// POST /plans/:id/execute-signed — execute with EIP-712 signature
+	if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/execute-signed") {
+		a.handleExecuteSigned(w, r, path)
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "仅支持 GET 或 POST .../execute-signed")
+		return
+	}
+
+	id := path
 
 	planID := common.HexToHash(id)
 	plan, err := a.executor.Plans(nil, planID)
@@ -239,6 +255,33 @@ func (a *Agent) handlePlanByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleExecuteSigned handles POST /plans/:id/execute-signed.
+// The user signs off-chain, the operator submits on-chain.
+func (a *Agent) handleExecuteSigned(w http.ResponseWriter, r *http.Request, id string) {
+	var req executeSignedRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_JSON", "请求体格式错误")
+		return
+	}
+
+	// Decode hex signature
+	sigHex := strings.TrimPrefix(req.Signature, "0x")
+	sig, err := hex.DecodeString(sigHex)
+	if err != nil || len(sig) != 65 {
+		writeError(w, http.StatusBadRequest, "INVALID_SIGNATURE", "签名格式错误，需要 65 字节 hex")
+		return
+	}
+
+	planID := common.HexToHash(id)
+	txHash, err := a.ExecutePlanWithSignature(planID, req.Deadline, sig)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "EXECUTE_FAILED", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"txHash": txHash})
 }
 
 // ── Settlement query helpers ────────────────────────────────

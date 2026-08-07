@@ -269,6 +269,42 @@ func (a *Agent) ExecutePlan(planID [32]byte) (string, error) {
 	return tx.Hash().Hex(), nil
 }
 
+// ExecutePlanWithSignature executes a plan using an EIP-712 signature from the user.
+// The operator sends the MON and pays gas; the user only signed off-chain.
+func (a *Agent) ExecutePlanWithSignature(planID [32]byte, deadline int64, signature []byte) (string, error) {
+	plan, err := a.executor.Plans(nil, planID)
+	if err != nil {
+		return "", fmt.Errorf("get plan: %w", err)
+	}
+	if plan.Executed {
+		return "", fmt.Errorf("plan already executed")
+	}
+	if plan.Operator == (common.Address{}) {
+		return "", fmt.Errorf("plan not found")
+	}
+
+	// Build calldata
+	swapABI, err := contracts.SimpleAMMPairMetaData.GetAbi()
+	if err != nil {
+		return "", fmt.Errorf("get ABI: %w", err)
+	}
+	calldata, err := swapABI.Pack("swap", big.NewInt(0))
+	if err != nil {
+		return "", fmt.Errorf("pack calldata: %w", err)
+	}
+
+	// Create auth with value = plan.InputAmount (operator pays MON)
+	auth := *a.auth
+	auth.Value = new(big.Int).Set(plan.InputAmount)
+
+	tx, err := a.executor.ExecutePlanWithSignature(&auth, planID, calldata, big.NewInt(deadline), signature)
+	if err != nil {
+		return "", fmt.Errorf("executePlanWithSignature tx: %w", err)
+	}
+
+	return tx.Hash().Hex(), nil
+}
+
 // computePlanID = keccak256(abi.encode(user, operator, nonce))
 func computePlanID(user, operator common.Address, nonce *big.Int) [32]byte {
 	// abi.encode(address,address,uint256)

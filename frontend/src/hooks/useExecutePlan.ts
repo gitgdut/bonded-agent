@@ -1,10 +1,30 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
+import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSignTypedData } from "wagmi";
 import { decodeEventLog } from "viem";
 import { planAbi, hasContract, PLAN_CONTRACT, SWAP_CALLDATA } from "@/lib/contracts";
+import { API_BASE_URL } from "@/lib/config";
 import type { Plan } from "@/lib/types";
+
+// ── EIP-712 domain and types (must match BondedExecutor.sol) ──
+
+function eip712Domain(verifyingContract: string, chainId: number) {
+  return {
+    name: "BondedExecutor",
+    version: "1",
+    chainId,
+    verifyingContract: verifyingContract as `0x${string}`,
+  } as const;
+}
+
+const eip712Types = {
+  ExecuteAuthorization: [
+    { name: "planId", type: "bytes32" },
+    { name: "inputAmount", type: "uint256" },
+    { name: "deadline", type: "uint256" },
+  ],
+} as const;
 
 export interface ExecuteResult {
   status: "executing" | "settled_ok" | "settled_shortfall" | "failed";
@@ -81,6 +101,7 @@ function parseReceiptLogs(
 export function useExecutePlan(plan: Plan | undefined) {
   const { address } = useAccount();
   const { writeContractAsync } = useWriteContract();
+  const { signTypedDataAsync } = useSignTypedData();
   const [txHash, setTxHash] = useState<`0x${string}` | undefined>();
   const [receiptResult, setReceiptResult] = useState<ExecuteResult | null>(null);
 
@@ -147,6 +168,60 @@ export function useExecutePlan(plan: Plan | undefined) {
     return fakeResult;
   }, [plan, writeContractAsync]);
 
+  const executeWithSignature = useCallback(async (): Promise<ExecuteResult> => {
+    if (!plan || !address) throw new Error("计划数据缺失或未连接钱包");
+
+    if (hasContract() && planAbi.length > 0) {
+      // 1. Build EIP-712 typed data
+      const deadline = Math.floor(Date.now() / 1000) + 3600; // 1 hour
+      const domain = eip712Domain(PLAN_CONTRACT, 10143);
+      const message = {
+        planId: plan.planId as `0x${string}`,
+        inputAmount: BigInt(plan.inputAmount),
+        deadline: BigInt(deadline),
+      };
+
+      // 2. User signs off-chain (free, no gas)
+      const signature = await signTypedDataAsync({
+        domain,
+        types: eip712Types,
+        primaryType: "ExecuteAuthorization",
+        message,
+      });
+
+      // 3. POST signature to operator API → operator submits tx
+      const apiRes = await fetch(`${API_BASE_URL}/plans/${plan.planId}/execute-signed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          signature,
+          deadline,
+        }),
+      });
+
+      if (!apiRes.ok) {
+        const err = await apiRes.json().catch(() => ({}));
+        throw new Error((err as any).message || "Operator 提交失败");
+      }
+
+      const { txHash: hash } = await apiRes.json();
+      setTxHash(hash as `0x${string}`);
+      setReceiptResult(null);
+      return { status: "executing", txHash: hash as string };
+    }
+
+    // Demo mode fallback
+    await new Promise((r) => setTimeout(r, 1200));
+    const fakeHash = `0x${"ab".repeat(32)}`;
+    const fakeResult: ExecuteResult = {
+      status: "settled_ok",
+      actualOutput: plan.guaranteedOutput,
+      txHash: fakeHash,
+    };
+    setReceiptResult(fakeResult);
+    return fakeResult;
+  }, [plan, address, signTypedDataAsync]);
+
   // The reactive result: when receipt is parsed, use that; otherwise reflect executing state
   const result: ExecuteResult | null = useMemo(() => {
     if (receiptResult) return receiptResult;
@@ -156,6 +231,7 @@ export function useExecutePlan(plan: Plan | undefined) {
 
   return {
     execute,
+    executeWithSignature,
     isConfirming: !!txHash && waitLoading,
     result,
     address,

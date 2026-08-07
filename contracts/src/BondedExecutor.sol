@@ -17,6 +17,14 @@ contract BondedExecutor {
     /// @notice Service fee in basis points (e.g., 30 = 0.3%)
     uint256 public serviceFeeBps;
 
+    // ── EIP-712 ─────────────────────────────────────────────────
+    bytes32 private constant EIP712_DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    bytes32 private constant EXECUTE_AUTH_TYPEHASH =
+        keccak256("ExecuteAuthorization(bytes32 planId,uint256 inputAmount,uint256 deadline)");
+
+    bytes32 private immutable DOMAIN_SEPARATOR;
+
     // ── Plan structure ──────────────────────────────────────────
     struct Plan {
         address user;              // who can execute
@@ -100,6 +108,13 @@ contract BondedExecutor {
     // ── Constructor ──────────────────────────────────────────────
     constructor(address _tUSDC) {
         tUSDC = MockUSDC(_tUSDC);
+        DOMAIN_SEPARATOR = keccak256(abi.encode(
+            EIP712_DOMAIN_TYPEHASH,
+            keccak256("BondedExecutor"),
+            keccak256("1"),
+            block.chainid,
+            address(this)
+        ));
     }
 
     // ── Plan Lifecycle ───────────────────────────────────────────
@@ -165,83 +180,50 @@ contract BondedExecutor {
             revert(); // wrong MON amount sent
         }
 
-        plan.executed = true;
+        _executeSwap(planId, plan, calldata_);
+    }
 
-        // ── Snapshot tUSDC balance of this executor before swap ─
-        uint256 balanceBefore = tUSDC.balanceOf(address(this));
+    /**
+     * @notice Operator executes a plan on behalf of the user via EIP-712 signature.
+     *         Operator sends MON, user signs authorization off-chain.
+     * @param planId The plan identifier
+     * @param calldata_ Must match plan.calldataHash
+     * @param deadline Signature expiry (seconds)
+     * @param signature EIP-712 signature from the plan user
+     */
+    function executePlanWithSignature(
+        bytes32 planId,
+        bytes calldata calldata_,
+        uint256 deadline,
+        bytes calldata signature
+    ) external payable {
+        Plan storage plan = plans[planId];
 
-        // ── Execute the swap ───────────────────────────────────
-        (bool success,) = plan.target.call{value: plan.inputAmount}(calldata_);
+        // ── Verify EIP-712 signature ──────────────────────────
+        if (block.timestamp > deadline) revert PlanExpired(deadline, block.timestamp);
 
-        if (success) {
-            // ── Swap succeeded: measure output received by executor ─
-            uint256 balanceAfter = tUSDC.balanceOf(address(this));
-            uint256 actualOutput = balanceAfter - balanceBefore;
+        bytes32 structHash = keccak256(abi.encode(
+            EXECUTE_AUTH_TYPEHASH,
+            planId,
+            msg.value,
+            deadline
+        ));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
+        address signer = _recoverSigner(digest, signature);
+        if (signer != plan.user) revert InvalidSignature();
 
-            // ── Deduct service fee ────────────────────────────
-            uint256 fee = (actualOutput * serviceFeeBps) / 10000;
-            uint256 userAmount = actualOutput - fee;
-
-            // Forward user's share
-            if (userAmount > 0) {
-                require(tUSDC.transfer(plan.user, userAmount), "output transfer failed");
-            }
-
-            // Pay service fee to operator
-            if (fee > 0) {
-                require(tUSDC.transfer(plan.operator, fee), "fee transfer failed");
-            }
-
-            if (userAmount >= plan.guaranteedOutput) {
-                // ── Normal: bond fully released ────────────────
-                _releaseBond(planId, plan);
-                emit ServiceFeePaid(planId, actualOutput, fee, userAmount);
-                emit PlanExecuted(planId, actualOutput, 0);
-            } else {
-                // ── Shortfall: compensate the difference ───────
-                uint256 shortfall = plan.guaranteedOutput - userAmount;
-                uint256 compensation = shortfall > plan.maxCompensation
-                    ? plan.maxCompensation
-                    : shortfall;
-
-                lockedBond[plan.operator] -= compensation;
-
-                // Pay user
-                require(tUSDC.transfer(plan.user, compensation), "compensation transfer failed");
-
-                // Release remaining bond (if any) to operator
-                uint256 remaining = plan.maxCompensation - compensation;
-                if (remaining > 0) {
-                    lockedBond[plan.operator] -= remaining;
-                    require(tUSDC.transfer(plan.operator, remaining), "bond release failed");
-                }
-
-                emit ShortfallPaid(planId, plan.guaranteedOutput, userAmount, compensation);
-                emit ServiceFeePaid(planId, actualOutput, fee, userAmount);
-                emit PlanExecuted(planId, actualOutput, compensation);
-            }
-        } else {
-            // ── Swap call reverted: refund user + pay failure compensation ──
-            // Refund MON to user
-            (bool refundOk,) = plan.user.call{value: plan.inputAmount}("");
-            if (!refundOk) revert SwapFailed(); // should not happen for EOA
-
-            // Pay failure compensation from bond
-            uint256 comp = plan.failureCompensation;
-            if (comp > 0) {
-                lockedBond[plan.operator] -= comp;
-                require(tUSDC.transfer(plan.user, comp), "failure compensation failed");
-            }
-
-            // Release remaining bond to operator
-            uint256 remainingBond = plan.maxCompensation - comp;
-            if (remainingBond > 0) {
-                lockedBond[plan.operator] -= remainingBond;
-                require(tUSDC.transfer(plan.operator, remainingBond), "bond release failed");
-            }
-
-            emit PlanFailed(planId, plan.inputAmount, comp);
+        // ── Standard guards ────────────────────────────────────
+        if (plan.executed) revert AlreadyExecuted();
+        if (block.timestamp > plan.deadline) revert PlanExpired(plan.deadline, block.timestamp);
+        if (keccak256(calldata_) != plan.calldataHash) {
+            revert CalldataMismatch(plan.calldataHash, keccak256(calldata_));
         }
+        if (msg.value != plan.inputAmount) {
+            revert(); // wrong MON amount sent
+        }
+
+        // ── Execute swap (same logic as executePlan) ────────────
+        _executeSwap(planId, plan, calldata_);
     }
 
     /// @notice Operator can cancel an unexecuted, non-expired plan and recover bond
@@ -277,8 +259,90 @@ contract BondedExecutor {
         emit BondReleased(planId, plan.operator, bond);
     }
 
+    /// @notice Shared swap execution + settlement logic.
+    function _executeSwap(bytes32 planId, Plan storage plan, bytes calldata calldata_) internal {
+        plan.executed = true;
+
+        uint256 balanceBefore = tUSDC.balanceOf(address(this));
+        (bool success,) = plan.target.call{value: plan.inputAmount}(calldata_);
+
+        if (success) {
+            uint256 balanceAfter = tUSDC.balanceOf(address(this));
+            uint256 actualOutput = balanceAfter - balanceBefore;
+
+            uint256 fee = (actualOutput * serviceFeeBps) / 10000;
+            uint256 userAmount = actualOutput - fee;
+
+            if (userAmount > 0) {
+                require(tUSDC.transfer(plan.user, userAmount), "output transfer failed");
+            }
+            if (fee > 0) {
+                require(tUSDC.transfer(plan.operator, fee), "fee transfer failed");
+            }
+
+            if (userAmount >= plan.guaranteedOutput) {
+                _releaseBond(planId, plan);
+                emit ServiceFeePaid(planId, actualOutput, fee, userAmount);
+                emit PlanExecuted(planId, actualOutput, 0);
+            } else {
+                uint256 shortfall = plan.guaranteedOutput - userAmount;
+                uint256 compensation = shortfall > plan.maxCompensation
+                    ? plan.maxCompensation : shortfall;
+
+                lockedBond[plan.operator] -= compensation;
+                require(tUSDC.transfer(plan.user, compensation), "compensation transfer failed");
+
+                uint256 remaining = plan.maxCompensation - compensation;
+                if (remaining > 0) {
+                    lockedBond[plan.operator] -= remaining;
+                    require(tUSDC.transfer(plan.operator, remaining), "bond release failed");
+                }
+
+                emit ShortfallPaid(planId, plan.guaranteedOutput, userAmount, compensation);
+                emit ServiceFeePaid(planId, actualOutput, fee, userAmount);
+                emit PlanExecuted(planId, actualOutput, compensation);
+            }
+        } else {
+            (bool refundOk,) = plan.user.call{value: plan.inputAmount}("");
+            if (!refundOk) revert SwapFailed();
+
+            uint256 comp = plan.failureCompensation;
+            if (comp > 0) {
+                lockedBond[plan.operator] -= comp;
+                require(tUSDC.transfer(plan.user, comp), "failure compensation failed");
+            }
+
+            uint256 remainingBond = plan.maxCompensation - comp;
+            if (remainingBond > 0) {
+                lockedBond[plan.operator] -= remainingBond;
+                require(tUSDC.transfer(plan.operator, remainingBond), "bond release failed");
+            }
+
+            emit PlanFailed(planId, plan.inputAmount, comp);
+        }
+    }
+
+    /// @notice Recover signer from EIP-712 digest + signature.
+    function _recoverSigner(bytes32 digest, bytes calldata signature) internal pure returns (address) {
+        if (signature.length != 65) revert InvalidSignature();
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := calldataload(signature.offset)
+            s := calldataload(add(signature.offset, 32))
+            v := byte(0, calldataload(add(signature.offset, 64)))
+        }
+        if (v < 27) v += 27;
+        if (v != 27 && v != 28) revert InvalidSignature();
+        address recovered = ecrecover(digest, v, r, s);
+        if (recovered == address(0)) revert InvalidSignature();
+        return recovered;
+    }
+
     error Unauthorized();
     error FeeTooHigh();
+    error InvalidSignature();
 
     // ── Fallback ──────────────────────────────────────────────
     receive() external payable {}

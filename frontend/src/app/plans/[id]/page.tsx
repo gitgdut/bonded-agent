@@ -23,7 +23,7 @@ export default function PlanPage() {
 
   const { plan, status, isLoading, error } = usePlan(planId);
   const { address } = useAccount();
-  const { execute, isConfirming, result: execResult } = useExecutePlan(plan);
+  const { executeWithSignature, isConfirming, result: execResult } = useExecutePlan(plan);
 
   const [execError, setExecError] = useState<unknown>();
 
@@ -63,7 +63,7 @@ export default function PlanPage() {
   const handleExecute = async () => {
     setExecError(undefined);
     try {
-      await execute();
+      await executeWithSignature();
     } catch (e) {
       setExecError(e);
     }
