@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { RequestForm } from "@/components/request/RequestForm";
 import { QuoteSummary } from "@/components/request/QuoteSummary";
 import { OperatorPicker } from "@/components/operator/OperatorPicker";
@@ -14,6 +14,7 @@ import type { OperatorStats } from "@/lib/types";
 export default function HomePage() {
   const [amountWei, setAmountWei] = useState<string | undefined>(undefined);
   const [selectedOperator, setSelectedOperator] = useState<OperatorStats | undefined>(undefined);
+  const [hydrated, setHydrated] = useState(false);
 
   const operatorsQuery = useOperators();
   const quoteQuery = useQuote(amountWei, !!amountWei);
@@ -21,10 +22,18 @@ export default function HomePage() {
 
   const quote = quoteQuery.data;
 
+  useEffect(() => {
+    setHydrated(true);
+    console.log("[page] hydrated, operators:", operatorsQuery.data?.length);
+  }, []);
+
   // Auto-select first operator when list loads
-  if (!selectedOperator && operatorsQuery.data?.length) {
-    setSelectedOperator(operatorsQuery.data[0]);
-  }
+  useEffect(() => {
+    if (!selectedOperator && operatorsQuery.data?.length) {
+      console.log("[page] auto-selecting first operator:", operatorsQuery.data[0].name);
+      setSelectedOperator(operatorsQuery.data[0]);
+    }
+  }, [operatorsQuery.data, selectedOperator]);
 
   const handleCreate = () => {
     if (!quote) return;
@@ -50,12 +59,36 @@ export default function HomePage() {
         <p className="mt-2 text-sm text-text-secondary">{COPY.tagline}</p>
       </div>
 
+      {/* Debug status bar — remove in production */}
+      <div className="rounded-lg border border-border/60 bg-bg-elevated px-4 py-2 text-xs font-mono">
+        <span className="text-text-muted">status: </span>
+        <span className={hydrated ? "text-green-400" : "text-yellow-400"}>
+          {hydrated ? "hydrated" : "SSR"}
+        </span>
+        <span className="mx-2 text-border">|</span>
+        <span className="text-text-muted">API: </span>
+        {operatorsQuery.isLoading ? (
+          <span className="text-yellow-400">loading…</span>
+        ) : operatorsQuery.isError ? (
+          <span className="text-red-400">ERROR: {operatorsQuery.error?.message}</span>
+        ) : (
+          <span className="text-green-400">{operatorsQuery.data?.length ?? 0} operators</span>
+        )}
+        <span className="mx-2 text-border">|</span>
+        <span className="text-text-muted">selected: </span>
+        <span className="text-accent-tech">{selectedOperator?.name ?? "none"}</span>
+      </div>
+
       {/* 运营方选择器 */}
       <OperatorPicker
         operators={operatorsQuery.data ?? []}
         selected={selectedOperator?.address}
-        onSelect={setSelectedOperator}
+        onSelect={(op) => {
+          console.log("[page] onSelect called:", op.name, op.address);
+          setSelectedOperator(op);
+        }}
         loading={operatorsQuery.isLoading}
+        error={operatorsQuery.error}
       />
 
       {/* 请求表单 */}

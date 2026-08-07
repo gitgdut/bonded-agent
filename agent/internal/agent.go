@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"fmt"
+	"log"
 	"math/big"
 	"time"
 
@@ -28,6 +29,7 @@ type Agent struct {
 	registry   *protocols.Registry          // Moss-style discover→load→action pipeline
 	executor   *contracts.BondedExecutor
 	reputation *ReputationEngine // operator stats + scores
+	erc8004    *ERC8004Service   // ERC-8004 on-chain identity (nil until deployed)
 }
 
 // ── Initialization ──────────────────────────────────────────
@@ -90,6 +92,26 @@ func NewAgent(cfg *Config) (*Agent, error) {
 	// Ensure the current operator appears in the list even if not in ops.json
 	reputation.EnsureStats(address)
 
+	// ERC-8004 identity service (best-effort; nil if not deployed yet)
+	var erc8004svc *ERC8004Service
+	if cfg.ERC8004IdentityAddr != (common.Address{}) && cfg.ERC8004ReputationAddr != (common.Address{}) {
+		svc, err := NewERC8004Service(client, cfg.ERC8004IdentityAddr, cfg.ERC8004ReputationAddr)
+		if err != nil {
+			log.Printf("ERC-8004 service init failed (non-fatal): %v", err)
+		} else {
+			erc8004svc = svc
+			// Auto-register this operator as an ERC-8004 agent
+			agentURI := BuildAgentURI("Bonded Agent Operator", "Guaranteed swap execution on BondedExecutor", "http://localhost:8787", 30, cfg.DefaultGuaranteeRatio)
+			agentID, err := svc.RegisterAgent(auth, agentURI)
+			if err != nil {
+				log.Printf("ERC-8004 register agent failed (non-fatal): %v", err)
+			} else {
+				log.Printf("ERC-8004 agent #%d registered for operator %s", agentID, address.Hex())
+				reputation.SetERC8004AgentID(address, agentID.String())
+			}
+		}
+	}
+
 	return &Agent{
 		client:     client,
 		chainID:    chainID,
@@ -101,6 +123,7 @@ func NewAgent(cfg *Config) (*Agent, error) {
 		registry:   registry,
 		executor:   executor,
 		reputation: reputation,
+		erc8004:    erc8004svc,
 	}, nil
 }
 
@@ -117,6 +140,11 @@ func (a *Agent) ChainID() *big.Int {
 // Reputation returns the reputation engine (for operator discovery endpoints).
 func (a *Agent) Reputation() *ReputationEngine {
 	return a.reputation
+}
+
+// ERC8004 returns the ERC-8004 identity service, or nil if not yet deployed.
+func (a *Agent) ERC8004() *ERC8004Service {
+	return a.erc8004
 }
 
 // ── Queries (free, read-only) ───────────────────────────────

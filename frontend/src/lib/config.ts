@@ -3,11 +3,13 @@
  * 复制 .env.example 为 .env.local 并修改
  */
 
-/** 后端服务地址(运营方 API) */
-/** 后端服务地址。为空时走 Next.js rewrite 代理（/quote → localhost:8787）。 */
+/**
+ * 后端 API 前缀。
+ * 设为 "/api" 时通过 Next.js rewrite 代理到 localhost:8787（推荐，避免跨域）。
+ * 设为 "http://localhost:8787" 时直连后端（需要 CORS + 网络可达）。
+ */
 export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8787";
-export const USE_API_PROXY = API_BASE_URL === "";
+  process.env.NEXT_PUBLIC_API_BASE_URL || "/api";
 
 /**
  * 是否使用演示数据。

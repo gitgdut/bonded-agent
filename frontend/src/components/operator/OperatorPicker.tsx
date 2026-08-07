@@ -9,11 +9,13 @@ export function OperatorPicker({
   selected,
   onSelect,
   loading,
+  error,
 }: {
   operators: OperatorStats[];
   selected?: string;
   onSelect: (operator: OperatorStats) => void;
   loading?: boolean;
+  error?: Error | null;
 }) {
   if (loading) {
     return (
@@ -24,6 +26,21 @@ export function OperatorPicker({
         <div className="glass-card flex items-center justify-center p-8">
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-accent-tech border-t-transparent" />
           <span className="ml-3 text-sm text-text-muted">加载运营方列表中…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-2">
+        <h2 className="text-sm font-semibold text-text-secondary">
+          选择运营方
+        </h2>
+        <div className="glass-card flex items-center justify-center p-8 border-red-400/30">
+          <span className="text-sm text-red-400">
+            加载失败：{error.message}
+          </span>
         </div>
       </div>
     );

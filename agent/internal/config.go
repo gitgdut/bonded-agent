@@ -25,6 +25,10 @@ type Config struct {
 	Operator         common.Address
 	OperatorProfiles []OperatorProfile // loaded from ops.json
 
+	// ERC-8004 identity contracts (deployed on Monad Testnet)
+	ERC8004IdentityAddr   common.Address
+	ERC8004ReputationAddr common.Address
+
 	// Simulation defaults
 	DefaultGuaranteeRatio float64 // e.g. 0.90 = guarantee 90% of expected output
 	DefaultMaxCompensation *big.Int
@@ -50,6 +54,9 @@ func LoadConfig() *Config {
 		DefaultMaxCompensation: parseBig(getEnv("MAX_COMPENSATION", "20000000000000000000")),  // 20 tUSDC
 		DefaultFailureComp:     parseBig(getEnv("FAILURE_COMPENSATION", "5000000000000000000")), // 5 tUSDC
 		DefaultDeadlineSeconds: parseInt(getEnv("DEADLINE_SECONDS", "86400")),                   // 24h
+
+		ERC8004IdentityAddr:   common.HexToAddress(getEnv("ERC8004_IDENTITY_ADDR", "")),
+		ERC8004ReputationAddr: common.HexToAddress(getEnv("ERC8004_REPUTATION_ADDR", "")),
 
 		OperatorProfiles: LoadOperatorProfiles("ops.json"),
 	}

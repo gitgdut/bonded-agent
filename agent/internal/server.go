@@ -100,6 +100,9 @@ func (a *Agent) ServeAPI(addr string) error {
 	mux.HandleFunc("/operators", a.handleOperators)
 	mux.HandleFunc("/operators/", a.handleOperatorByAddr)
 
+	// ERC-8004 identity
+	mux.HandleFunc("/identity", a.handleIdentity)
+
 	log.Printf("API listening on %s", addr)
 	return http.ListenAndServe(addr, withCORS(mux))
 }
@@ -507,6 +510,31 @@ func (a *Agent) handleOperatorByAddr(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, stats)
+}
+
+// handleIdentity returns ERC-8004 identity for the server's own operator.
+// GET /identity
+func (a *Agent) handleIdentity(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "仅支持 GET")
+		return
+	}
+
+	if a.erc8004 == nil {
+		writeJSON(w, http.StatusOK, map[string]string{
+			"status":  "unavailable",
+			"message": "ERC-8004 contracts not yet deployed on this chain",
+		})
+		return
+	}
+
+	// For now, return a placeholder — full agentId lookup requires deployment
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"operator": a.address.Hex(),
+		"status":   "ready",
+		"identityRegistry": a.cfg.ERC8004IdentityAddr.Hex(),
+		"reputationRegistry": a.cfg.ERC8004ReputationAddr.Hex(),
+	})
 }
 
 // ── Helpers ─────────────────────────────────────────────────

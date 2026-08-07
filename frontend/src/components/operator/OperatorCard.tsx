@@ -29,12 +29,26 @@ export function OperatorCard({
   const name = operator.name ?? shortAddress(operator.address);
   const feePercent = ((operator.serviceFeeBps ?? 30) / 100).toFixed(2);
 
+  const handleClick = () => {
+    onClick?.();
+  };
+
   return (
-    <button
-      onClick={onClick}
-      className={`glass-card w-full p-4 text-left transition-all ${
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={handleClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") handleClick();
+      }}
+      style={selected ? {
+        border: "2px solid #8b5cf6",
+        boxShadow: "0 0 16px rgba(139, 92, 246, 0.35), 0 8px 24px rgba(0, 0, 0, 0.45)",
+        background: "rgba(139, 92, 246, 0.08)",
+      } : undefined}
+      className={`glass-card w-full p-4 text-left transition-all cursor-pointer select-none ${
         selected
-          ? "ring-2 ring-accent-tech border-accent-tech/50"
+          ? ""
           : "hover:ring-1 hover:ring-white/10"
       }`}
     >
@@ -50,6 +64,11 @@ export function OperatorCard({
             <span className="text-sm font-semibold text-text-primary">
               {name}
             </span>
+            {operator.erc8004AgentId && (
+              <span className="rounded bg-purple-400/15 px-1.5 py-0.5 text-[10px] text-purple-400">
+                ERC-8004 #{operator.erc8004AgentId}
+              </span>
+            )}
             {operator.isDefault && (
               <span className="rounded bg-accent-tech/15 px-1.5 py-0.5 text-[10px] text-accent-tech">
                 Default
@@ -92,6 +111,6 @@ export function OperatorCard({
           <span className="text-text-primary">{operator.totalPlans}</span>
         </span>
       </div>
-    </button>
+    </div>
   );
 }

@@ -18,10 +18,11 @@ import (
 
 // OperatorProfile holds off-chain metadata (loaded from ops.json).
 type OperatorProfile struct {
-	Address string  `json:"address"`
-	Name    string  `json:"name"`
-	FeeBps  int64   `json:"feeBps"`
-	Ratio   float64 `json:"ratio"`
+	Address          string  `json:"address"`
+	Name             string  `json:"name"`
+	FeeBps           int64   `json:"feeBps"`
+	Ratio            float64 `json:"ratio"`
+	ERC8004AgentID   string  `json:"erc8004AgentId,omitempty"` // ERC-8004 identity NFT token ID
 }
 
 // OperatorStats holds on-chain derived statistics and reputation score.
@@ -38,6 +39,7 @@ type OperatorStats struct {
 	ServiceFeeBps   int64   `json:"serviceFeeBps"`
 	GuaranteedRatio float64 `json:"guaranteedRatio"`
 	IsDefault       bool    `json:"isDefault"` // true when this operator is the current server
+	ERC8004AgentID  string  `json:"erc8004AgentId,omitempty"` // ERC-8004 identity NFT
 }
 
 // ── Reputation engine ─────────────────────────────────────────
@@ -169,6 +171,7 @@ func (e *ReputationEngine) EnsureStats(addr common.Address) *OperatorStats {
 		s.Name = p.Name
 		s.ServiceFeeBps = p.FeeBps
 		s.GuaranteedRatio = p.Ratio
+		s.ERC8004AgentID = p.ERC8004AgentID
 	}
 
 	e.stats[addr] = s
@@ -209,6 +212,14 @@ func (e *ReputationEngine) GetOperator(addr common.Address) *OperatorStats {
 	return &stats
 }
 
+// SetERC8004AgentID records the ERC-8004 identity NFT token ID for an operator.
+func (e *ReputationEngine) SetERC8004AgentID(addr common.Address, agentID string) {
+	s := e.EnsureStats(addr)
+	e.mu.Lock()
+	s.ERC8004AgentID = agentID
+	e.mu.Unlock()
+}
+
 // RecordExecution is called after a plan execution to update stats in real time.
 func (e *ReputationEngine) RecordExecution(operator common.Address, planID [32]byte, status string, inputAmount *big.Int) {
 	e.planOperator[planID] = operator
@@ -238,11 +249,20 @@ func (e *ReputationEngine) RecordExecution(operator common.Address, planID [32]b
 // ── Scoring ───────────────────────────────────────────────────
 
 func (e *ReputationEngine) populateDerived(s *OperatorStats) {
-	// Load profile metadata
+	// Load profile metadata (don't overwrite runtime-set values like ERC-8004 agent ID)
 	if p, ok := e.profiles[common.HexToAddress(s.Address)]; ok {
-		s.Name = p.Name
-		s.ServiceFeeBps = p.FeeBps
-		s.GuaranteedRatio = p.Ratio
+		if s.Name == "" {
+			s.Name = p.Name
+		}
+		if s.ServiceFeeBps == 0 {
+			s.ServiceFeeBps = p.FeeBps
+		}
+		if s.GuaranteedRatio == 0 {
+			s.GuaranteedRatio = p.Ratio
+		}
+		if s.ERC8004AgentID == "" {
+			s.ERC8004AgentID = p.ERC8004AgentID
+		}
 	}
 
 	if s.TotalPlans > 0 {

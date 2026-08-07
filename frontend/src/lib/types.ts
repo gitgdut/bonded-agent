@@ -98,6 +98,7 @@ export interface OperatorStats {
   serviceFeeBps: number;
   guaranteedRatio: number;
   isDefault?: boolean;
+  erc8004AgentId?: string; // ERC-8004 identity NFT token ID
 }
 
 /** 后端错误结构(约定) */

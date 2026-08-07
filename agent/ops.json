@@ -1,5 +1,11 @@
 [
   {
+    "address": "0xdc1746793D71256Be16B70188297ab5aB056208F",
+    "name": "Bonded",
+    "feeBps": 30,
+    "ratio": 0.90
+  },
+  {
     "address": "0xB2F400E688a21f79F11c7e5c016eEaE436CA9E4C",
     "name": "Bodier",
     "feeBps": 30,
