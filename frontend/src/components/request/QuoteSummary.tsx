@@ -21,9 +21,14 @@ export function QuoteSummary({
     <div className="glass-card space-y-4 p-5">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-text-secondary">报价预览</h2>
-        <span className="rounded-full border border-accent-tech/40 bg-accent-tech/10 px-2 py-0.5 text-[11px] text-accent-tech">
-          {HOME.simulatedRateTag}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="rounded-full border border-accent-warm/40 bg-accent-warm/10 px-2 py-0.5 text-[11px] text-accent-warm">
+            {quote.protocol ?? "simple-amm"}
+          </span>
+          <span className="rounded-full border border-accent-tech/40 bg-accent-tech/10 px-2 py-0.5 text-[11px] text-accent-tech">
+            {HOME.simulatedRateTag}
+          </span>
+        </div>
       </div>
 
       <dl className="grid grid-cols-2 gap-4">

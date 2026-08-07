@@ -14,7 +14,8 @@ export const COPY = {
   tagline: "Agent 运营方为交易结果锁定保证金,结果不足自动赔付",
   footer: [
     "运行于 Monad Testnet",
-    "AMM 恒积做市 (SimpleAMMPair)",
+    "Moss-style Protocol Pipeline: discover→load→action→simulate",
+    "协议: simple-amm (恒定积 AMM)  |  可扩展至 PancakeSwap / Kuru",
     "测试资产,无真实价值",
   ] as const,
   connectWallet: "连接钱包",

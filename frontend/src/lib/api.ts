@@ -65,6 +65,7 @@ function mockQuote(inputAmountWei: string): Quote {
     expectedOutput: expected.toString(),
     simulatedRate: String(MOCK_RATE),
     timestamp: Date.now(),
+    protocol: "simple-amm",
     isMock: true,
   };
 }

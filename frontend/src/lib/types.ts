@@ -22,6 +22,7 @@ export interface Quote {
   expectedOutput: string; // wei,预期输出
   simulatedRate: string; // 模拟汇率(每 1 个输入代币可换得的输出)
   timestamp: number; // 报价生成时间(ms)
+  protocol: string; // 报价来源协议 (Moss-style discover pipeline)
   isMock?: boolean; // 演示数据标记(仅 mock 模式)
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/gitgdut/bonded-agent/agent/contracts"
+	"github.com/gitgdut/bonded-agent/agent/internal/protocols"
 )
 
 // ── JSON types (matching frontend types.ts) ──────────────────
@@ -23,6 +24,7 @@ type quoteResponse struct {
 	ExpectedOutput string `json:"expectedOutput"`
 	SimulatedRate  string `json:"simulatedRate"`
 	Timestamp      int64  `json:"timestamp"`
+	Protocol       string `json:"protocol"`
 }
 
 type createPlanRequest struct {
@@ -89,6 +91,11 @@ func (a *Agent) ServeAPI(addr string) error {
 	mux.HandleFunc("/plans", a.handlePlans)
 	mux.HandleFunc("/plans/", a.handlePlanByID)
 
+	// Moss-style discover → load → simulate endpoints
+	mux.HandleFunc("/discover", a.handleDiscover)
+	mux.HandleFunc("/load", a.handleLoad)
+	mux.HandleFunc("/simulate", a.handleSimulate)
+
 	log.Printf("API listening on %s", addr)
 	return http.ListenAndServe(addr, withCORS(mux))
 }
@@ -127,6 +134,7 @@ func (a *Agent) handleQuote(w http.ResponseWriter, r *http.Request) {
 		ExpectedOutput: expected.String(),
 		SimulatedRate:  rate.String(),
 		Timestamp:      time.Now().UnixMilli(),
+		Protocol:       "simple-amm",
 	})
 }
 
@@ -343,6 +351,107 @@ func (a *Agent) queryPlanSettlement(planID [32]byte) planSettlement {
 	}
 
 	return s
+}
+
+// ── Moss-style discover → load → simulate handlers ──────────
+
+// handleDiscover returns all available protocol capabilities and queries.
+// GET /discover?verb=swap&category=dex&protocol=simple-amm
+func (a *Agent) handleDiscover(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "仅支持 GET")
+		return
+	}
+
+	q := r.URL.Query()
+	filter := protocols.DiscoverFilter{
+		Verb:     protocols.Verb(q.Get("verb")),
+		Category: protocols.Category(q.Get("category")),
+		Protocol: q.Get("protocol"),
+	}
+
+	coords := a.registry.Discover(filter)
+	writeJSON(w, http.StatusOK, coords)
+}
+
+// handleLoad returns full calling contracts for requested methods.
+// POST /load — body: {"items": [{"protocol":"simple-amm","method":"quote"}]}
+func (a *Agent) handleLoad(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "仅支持 POST")
+		return
+	}
+
+	var req struct {
+		Items []struct {
+			Protocol string `json:"protocol"`
+			Method   string `json:"method"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_JSON", "请求体格式错误")
+		return
+	}
+
+	var items []struct{ Protocol, Method string }
+	for _, item := range req.Items {
+		items = append(items, struct{ Protocol, Method string }{item.Protocol, item.Method})
+	}
+
+	stubs := a.registry.Load(items)
+	writeJSON(w, http.StatusOK, stubs)
+}
+
+// handleSimulate simulates a capability transaction via eth_call.
+// POST /simulate — body: {"tx": {"from":"0x...","to":"0x...","data":"0x...","value":"0"}}
+func (a *Agent) handleSimulate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "仅支持 POST")
+		return
+	}
+
+	var req struct {
+		Tx struct {
+			From  string `json:"from"`
+			To    string `json:"to"`
+			Data  string `json:"data"`
+			Value string `json:"value"`
+		} `json:"tx"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_JSON", "请求体格式错误")
+		return
+	}
+
+	value, _ := new(big.Int).SetString(req.Tx.Value, 10)
+	if value == nil {
+		value = big.NewInt(0)
+	}
+
+	tx := protocols.TransactionNode{
+		From:  common.HexToAddress(req.Tx.From),
+		To:    common.HexToAddress(req.Tx.To),
+		Data:  common.FromHex(req.Tx.Data),
+		Value: value,
+	}
+
+	sim := protocols.NewSimulator(a.client)
+	result, err := sim.Simulate(tx)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	returnDataHex := "0x" + common.Bytes2Hex(result.ReturnData)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":    result.Success,
+		"returnData": returnDataHex,
+		"gasUsed":    fmt.Sprintf("%d", result.GasUsed),
+	})
 }
 
 // ── Helpers ─────────────────────────────────────────────────

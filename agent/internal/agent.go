@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/gitgdut/bonded-agent/agent/contracts"
+	"github.com/gitgdut/bonded-agent/agent/internal/protocols"
 )
 
 // Agent handles all interactions with Bonded Agent contracts.
@@ -23,7 +24,8 @@ type Agent struct {
 
 	cfg      *Config // needed for contract addresses
 	usdc     *contracts.MockUSDC
-	dex      *contracts.SimpleAMMPair
+	amm      *protocols.SimpleAMMProtocol // Moss-style protocol adapter
+	registry *protocols.Registry          // Moss-style discover→load→action pipeline
 	executor *contracts.BondedExecutor
 }
 
@@ -72,6 +74,13 @@ func NewAgent(cfg *Config) (*Agent, error) {
 		return nil, fmt.Errorf("bind BondedExecutor: %w", err)
 	}
 
+	// Build Moss-style protocol registry
+	ammProtocol := protocols.NewSimpleAMMProtocol(dex, cfg.DexAddr)
+	registry := protocols.NewRegistry()
+	if err := registry.Register(ammProtocol); err != nil {
+		return nil, fmt.Errorf("register simple-amm: %w", err)
+	}
+
 	return &Agent{
 		client:    client,
 		chainID:   chainID,
@@ -79,7 +88,8 @@ func NewAgent(cfg *Config) (*Agent, error) {
 		address:   address,
 		cfg:       cfg,
 		usdc:      usdc,
-		dex:       dex,
+		amm:       ammProtocol,
+		registry:  registry,
 		executor:  executor,
 	}, nil
 }
@@ -97,16 +107,34 @@ func (a *Agent) ChainID() *big.Int {
 // ── Queries (free, read-only) ───────────────────────────────
 
 // GetRate returns the estimated exchange rate (tUSDC per 1 MON).
-// Uses the AMM formula: queries getAmountOut(1 MON) from the pool.
+// Uses the Moss-style registry: discover → action("quote").
 func (a *Agent) GetRate() (*big.Int, error) {
 	oneMON := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
-	return a.dex.GetAmountOut(nil, oneMON)
+	result, err := a.registry.Action("simple-amm", "quote", a.address, map[string]interface{}{
+		"amountIn": oneMON.String(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("quote: %w", err)
+	}
+	data := result.Data.(map[string]interface{})
+	rateStr, _ := data["expectedOutput"].(string)
+	rate, _ := new(big.Int).SetString(rateStr, 10)
+	return rate, nil
 }
 
 // SimulateSwap computes the expected tUSDC output for a given MON input.
-// Uses the AMM constant-product formula (read-only call).
+// Uses the Moss-style action pipeline: action("simple-amm", "quote", ...).
 func (a *Agent) SimulateSwap(monAmount *big.Int) (*big.Int, error) {
-	return a.dex.GetAmountOut(nil, monAmount)
+	result, err := a.registry.Action("simple-amm", "quote", a.address, map[string]interface{}{
+		"amountIn": monAmount.String(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("quote: %w", err)
+	}
+	data := result.Data.(map[string]interface{})
+	outStr, _ := data["expectedOutput"].(string)
+	out, _ := new(big.Int).SetString(outStr, 10)
+	return out, nil
 }
 
 // GetPlan retrieves a plan by its ID.
@@ -146,16 +174,20 @@ func (a *Agent) OpenPlan(
 	failureCompensation *big.Int,
 	deadline *big.Int,
 ) (string, string, error) {
-	// Build calldata: swap(uint256 minOutput) with minOutput=0
-	swapABI, err := contracts.SimpleAMMPairMetaData.GetAbi()
+	// Build calldata via Moss-style registry: action("swap") → builds the unsigned tx
+	swapResult, err := a.registry.Action("simple-amm", "swap", a.cfg.BondedExecutor, map[string]interface{}{
+		"minOutput": "0",
+	})
 	if err != nil {
-		return "", "", fmt.Errorf("get ABI: %w", err)
+		return "", "", fmt.Errorf("build swap calldata: %w", err)
 	}
-	calldata, err := swapABI.Pack("swap", big.NewInt(0))
-	if err != nil {
-		return "", "", fmt.Errorf("pack calldata: %w", err)
+	if swapResult.Node == nil || swapResult.Node.Tx == nil {
+		return "", "", fmt.Errorf("swap action returned no transaction node")
 	}
+
+	calldata := swapResult.Node.Tx.Data
 	calldataHash := crypto.Keccak256Hash(calldata)
+	target := swapResult.Node.Tx.To // protocol-determined target (SimpleAMMPair, PancakeSwap router, etc.)
 
 	// Compute planID = keccak256(abi.encode(user, operator, nonce))
 	nonce := big.NewInt(time.Now().UnixNano())
@@ -170,7 +202,7 @@ func (a *Agent) OpenPlan(
 		GuaranteedOutput:    guaranteedOutput,
 		MaxCompensation:     maxCompensation,
 		FailureCompensation: failureCompensation,
-		Target:              a.cfg.DexAddr,
+		Target:              target,
 		CalldataHash:        calldataHash,
 		Deadline:            deadline,
 		Nonce:               nonce,
@@ -247,21 +279,22 @@ func (a *Agent) ExecutePlan(planID [32]byte) (string, error) {
 		return "", fmt.Errorf("plan not found")
 	}
 
-	// Build calldata matching what OpenPlan stored (swap(0))
-	swapABI, err := contracts.SimpleAMMPairMetaData.GetAbi()
+	// Build calldata via Moss-style registry (must match what OpenPlan stored)
+	swapResult, err := a.registry.Action("simple-amm", "swap", a.cfg.BondedExecutor, map[string]interface{}{
+		"minOutput": "0",
+	})
 	if err != nil {
-		return "", fmt.Errorf("get ABI: %w", err)
+		return "", fmt.Errorf("build swap calldata: %w", err)
 	}
-	calldata, err := swapABI.Pack("swap", big.NewInt(0))
-	if err != nil {
-		return "", fmt.Errorf("pack calldata: %w", err)
+	if swapResult.Node == nil || swapResult.Node.Tx == nil {
+		return "", fmt.Errorf("swap action returned no transaction node")
 	}
 
 	// Create auth with value = plan.InputAmount
 	auth := *a.auth // shallow copy
 	auth.Value = new(big.Int).Set(plan.InputAmount)
 
-	tx, err := a.executor.ExecutePlan(&auth, planID, calldata)
+	tx, err := a.executor.ExecutePlan(&auth, planID, swapResult.Node.Tx.Data)
 	if err != nil {
 		return "", fmt.Errorf("executePlan tx: %w", err)
 	}
@@ -283,21 +316,22 @@ func (a *Agent) ExecutePlanWithSignature(planID [32]byte, deadline int64, signat
 		return "", fmt.Errorf("plan not found")
 	}
 
-	// Build calldata
-	swapABI, err := contracts.SimpleAMMPairMetaData.GetAbi()
+	// Build calldata via Moss-style registry (must match what OpenPlan stored)
+	swapResult, err := a.registry.Action("simple-amm", "swap", a.cfg.BondedExecutor, map[string]interface{}{
+		"minOutput": "0",
+	})
 	if err != nil {
-		return "", fmt.Errorf("get ABI: %w", err)
+		return "", fmt.Errorf("build swap calldata: %w", err)
 	}
-	calldata, err := swapABI.Pack("swap", big.NewInt(0))
-	if err != nil {
-		return "", fmt.Errorf("pack calldata: %w", err)
+	if swapResult.Node == nil || swapResult.Node.Tx == nil {
+		return "", fmt.Errorf("swap action returned no transaction node")
 	}
 
 	// Create auth with value = plan.InputAmount (operator pays MON)
 	auth := *a.auth
 	auth.Value = new(big.Int).Set(plan.InputAmount)
 
-	tx, err := a.executor.ExecutePlanWithSignature(&auth, planID, calldata, big.NewInt(deadline), signature)
+	tx, err := a.executor.ExecutePlanWithSignature(&auth, planID, swapResult.Node.Tx.Data, big.NewInt(deadline), signature)
 	if err != nil {
 		return "", fmt.Errorf("executePlanWithSignature tx: %w", err)
 	}
