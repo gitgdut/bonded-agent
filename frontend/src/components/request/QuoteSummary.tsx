@@ -39,7 +39,14 @@ export function QuoteSummary({
           </dd>
         </div>
         <div>
-          <dt className="text-xs text-text-muted">{QUOTE.guaranteedOutput}</dt>
+          <dt className="text-xs text-text-muted">
+            {QUOTE.guaranteedOutput}
+            {quote.operator && (
+              <span className="ml-1 text-text-muted">
+                ({(quote.operator.guaranteedRatio * 100).toFixed(0)}%)
+              </span>
+            )}
+          </dt>
           <dd className="mt-1">
             <AmountToken value={quote.expectedOutput} token={OUTPUT_TOKEN} glow />
           </dd>
@@ -57,9 +64,11 @@ export function QuoteSummary({
           </dd>
         </div>
         <div>
-          <dt className="text-xs text-text-muted">{QUOTE.serviceFee}</dt>
+          <dt className="text-xs text-text-muted">
+            服务费 ({((quote.operator?.serviceFeeBps ?? 30) / 100).toFixed(2)}%)
+          </dt>
           <dd className="mt-1 text-sm text-text-primary">
-            <AmountToken value={((BigInt(quote.expectedOutput) * 30n) / 10000n).toString()} token={OUTPUT_TOKEN} />
+            <AmountToken value={((BigInt(quote.expectedOutput) * BigInt(quote.operator?.serviceFeeBps ?? 30)) / 10000n).toString()} token={OUTPUT_TOKEN} />
           </dd>
         </div>
       </dl>

@@ -22,6 +22,7 @@ import type {
   ApiError,
   CreatePlanRequest,
   CreatePlanResponse,
+  OperatorStats,
   Plan,
   Quote,
 } from "./types";
@@ -163,6 +164,62 @@ export async function fetchHistoryPlans(): Promise<Plan[]> {
   }
   // 真实模式:前端订阅链上事件后本地重建,不依赖后端列表接口
   return [];
+}
+
+/** GET /operators — 运营方列表及声誉数据 */
+function mockOperators(): OperatorStats[] {
+  return [
+    {
+      address: "0xB2F400E688a21f79F11c7e5c016eEaE436CA9E4C",
+      name: "Bodier",
+      totalPlans: 3,
+      successPlans: 3,
+      shortfallPlans: 0,
+      failedPlans: 0,
+      totalVolume: "3000000000000000000",
+      reputationScore: 90,
+      successRate: 100,
+      serviceFeeBps: 30,
+      guaranteedRatio: 0.90,
+      isDefault: false,
+    },
+    {
+      address: "0xDc17fDad88A81Ce3C28F83b0a1706f535723EfbD",
+      name: "SwiftSwap",
+      totalPlans: 5,
+      successPlans: 4,
+      shortfallPlans: 1,
+      failedPlans: 0,
+      totalVolume: "5000000000000000000",
+      reputationScore: 82,
+      successRate: 80,
+      serviceFeeBps: 25,
+      guaranteedRatio: 0.92,
+      isDefault: false,
+    },
+    {
+      address: "0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B",
+      name: "SecureTrade",
+      totalPlans: 2,
+      successPlans: 1,
+      shortfallPlans: 0,
+      failedPlans: 1,
+      totalVolume: "2000000000000000000",
+      reputationScore: 55,
+      successRate: 50,
+      serviceFeeBps: 40,
+      guaranteedRatio: 0.95,
+      isDefault: false,
+    },
+  ];
+}
+
+export async function fetchOperators(): Promise<OperatorStats[]> {
+  if (USE_MOCK) {
+    await delay(MOCK_API_DELAY_MS);
+    return mockOperators();
+  }
+  return request<OperatorStats[]>("/operators");
 }
 
 /** 金额工具:用于构造请求体 */

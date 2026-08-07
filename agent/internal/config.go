@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"os"
@@ -21,7 +22,8 @@ type Config struct {
 	BondedExecutor common.Address
 
 	// Operator parameters
-	Operator common.Address
+	Operator         common.Address
+	OperatorProfiles []OperatorProfile // loaded from ops.json
 
 	// Simulation defaults
 	DefaultGuaranteeRatio float64 // e.g. 0.90 = guarantee 90% of expected output
@@ -48,6 +50,8 @@ func LoadConfig() *Config {
 		DefaultMaxCompensation: parseBig(getEnv("MAX_COMPENSATION", "20000000000000000000")),  // 20 tUSDC
 		DefaultFailureComp:     parseBig(getEnv("FAILURE_COMPENSATION", "5000000000000000000")), // 5 tUSDC
 		DefaultDeadlineSeconds: parseInt(getEnv("DEADLINE_SECONDS", "86400")),                   // 24h
+
+		OperatorProfiles: LoadOperatorProfiles("ops.json"),
 	}
 
 	return cfg
@@ -88,4 +92,19 @@ func parseBig(s string) *big.Int {
 func parseInt(s string) int64 {
 	n, _ := strconv.ParseInt(s, 10, 64)
 	return n
+}
+
+// LoadOperatorProfiles reads operator metadata from ops.json.
+// Falls back to empty list if the file is missing or malformed.
+func LoadOperatorProfiles(path string) []OperatorProfile {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+
+	var profiles []OperatorProfile
+	if err := json.Unmarshal(data, &profiles); err != nil {
+		return nil
+	}
+	return profiles
 }

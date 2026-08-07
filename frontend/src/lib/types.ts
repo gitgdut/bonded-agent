@@ -24,6 +24,7 @@ export interface Quote {
   timestamp: number; // 报价生成时间(ms)
   protocol: string; // 报价来源协议 (Moss-style discover pipeline)
   isMock?: boolean; // 演示数据标记(仅 mock 模式)
+  operator?: OperatorStats; // 选中的运营方信息 (多运营方支持)
 }
 
 /** POST /plans 请求体 */
@@ -81,6 +82,22 @@ export interface PlanEvent {
   txHash: string;
   blockNumber: bigint;
   data: Record<string, unknown>;
+}
+
+/** GET /operators 响应 — 运营方声誉数据 */
+export interface OperatorStats {
+  address: string;
+  name?: string;
+  totalPlans: number;
+  successPlans: number;
+  shortfallPlans: number;
+  failedPlans: number;
+  totalVolume: string;
+  reputationScore: number;
+  successRate: number;
+  serviceFeeBps: number;
+  guaranteedRatio: number;
+  isDefault?: boolean;
 }
 
 /** 后端错误结构(约定) */

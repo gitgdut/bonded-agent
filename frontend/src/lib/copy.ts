@@ -112,6 +112,19 @@ export const HISTORY = {
   goRequest: "发起担保 Swap",
 } as const;
 
+/* ---------------- 运营方选择器 ---------------- */
+
+export const OPERATOR = {
+  pickerTitle: "选择运营方",
+  loading: "加载运营方列表中…",
+  noOperators: "暂无可用运营方",
+  score: "声誉评分",
+  successRate: "成功率",
+  fee: "费率",
+  guaranteeRatio: "保证比率",
+  totalPlans: "交易数",
+} as const;
+
 /* ---------------- 错误映射(文档 §12.4) ---------------- */
 
 export const ERROR_COPY: Record<string, string> = {

@@ -22,11 +22,12 @@ type Agent struct {
 	auth    *bind.TransactOpts
 	address common.Address
 
-	cfg      *Config // needed for contract addresses
-	usdc     *contracts.MockUSDC
-	amm      *protocols.SimpleAMMProtocol // Moss-style protocol adapter
-	registry *protocols.Registry          // Moss-style discover→load→action pipeline
-	executor *contracts.BondedExecutor
+	cfg        *Config // needed for contract addresses
+	usdc       *contracts.MockUSDC
+	amm        *protocols.SimpleAMMProtocol // Moss-style protocol adapter
+	registry   *protocols.Registry          // Moss-style discover→load→action pipeline
+	executor   *contracts.BondedExecutor
+	reputation *ReputationEngine // operator stats + scores
 }
 
 // ── Initialization ──────────────────────────────────────────
@@ -81,16 +82,25 @@ func NewAgent(cfg *Config) (*Agent, error) {
 		return nil, fmt.Errorf("register simple-amm: %w", err)
 	}
 
+	// Build reputation engine (best-effort, won't block startup)
+	reputation, err := NewReputationEngine(executor, cfg.OperatorProfiles)
+	if err != nil {
+		reputation = &ReputationEngine{stats: make(map[common.Address]*OperatorStats)}
+	}
+	// Ensure the current operator appears in the list even if not in ops.json
+	reputation.EnsureStats(address)
+
 	return &Agent{
-		client:    client,
-		chainID:   chainID,
-		auth:      auth,
-		address:   address,
-		cfg:       cfg,
-		usdc:      usdc,
-		amm:       ammProtocol,
-		registry:  registry,
-		executor:  executor,
+		client:     client,
+		chainID:    chainID,
+		auth:       auth,
+		address:    address,
+		cfg:        cfg,
+		usdc:       usdc,
+		amm:        ammProtocol,
+		registry:   registry,
+		executor:   executor,
+		reputation: reputation,
 	}, nil
 }
 
@@ -102,6 +112,11 @@ func (a *Agent) Address() common.Address {
 // ChainID returns the connected chain ID.
 func (a *Agent) ChainID() *big.Int {
 	return a.chainID
+}
+
+// Reputation returns the reputation engine (for operator discovery endpoints).
+func (a *Agent) Reputation() *ReputationEngine {
+	return a.reputation
 }
 
 // ── Queries (free, read-only) ───────────────────────────────

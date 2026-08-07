@@ -96,6 +96,10 @@ func (a *Agent) ServeAPI(addr string) error {
 	mux.HandleFunc("/load", a.handleLoad)
 	mux.HandleFunc("/simulate", a.handleSimulate)
 
+	// Operator discovery + reputation
+	mux.HandleFunc("/operators", a.handleOperators)
+	mux.HandleFunc("/operators/", a.handleOperatorByAddr)
+
 	log.Printf("API listening on %s", addr)
 	return http.ListenAndServe(addr, withCORS(mux))
 }
@@ -452,6 +456,57 @@ func (a *Agent) handleSimulate(w http.ResponseWriter, r *http.Request) {
 		"returnData": returnDataHex,
 		"gasUsed":    fmt.Sprintf("%d", result.GasUsed),
 	})
+}
+
+// ── Operator discovery + reputation ───────────────────────────
+
+// handleOperators returns all known operators with reputation data.
+// GET /operators
+func (a *Agent) handleOperators(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "仅支持 GET")
+		return
+	}
+
+	operators := a.reputation.GetOperators()
+
+	// Mark the server's own operator as default
+	defaultAddr := a.address.Hex()
+	for i := range operators {
+		if operators[i].Address == defaultAddr {
+			operators[i].IsDefault = true
+		}
+	}
+
+	writeJSON(w, http.StatusOK, operators)
+}
+
+// handleOperatorByAddr returns details for a single operator.
+// GET /operators/:addr
+func (a *Agent) handleOperatorByAddr(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "仅支持 GET")
+		return
+	}
+
+	addrHex := strings.TrimPrefix(r.URL.Path, "/operators/")
+	if addrHex == "" {
+		writeError(w, http.StatusBadRequest, "MISSING_ADDR", "缺少 operator 地址")
+		return
+	}
+
+	addr := common.HexToAddress(addrHex)
+	stats := a.reputation.GetOperator(addr)
+	if stats == nil {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "未找到该运营方")
+		return
+	}
+
+	if stats.Address == a.address.Hex() {
+		stats.IsDefault = true
+	}
+
+	writeJSON(w, http.StatusOK, stats)
 }
 
 // ── Helpers ─────────────────────────────────────────────────
