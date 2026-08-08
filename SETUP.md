@@ -20,8 +20,8 @@
 ## 2. 拉取代码
 
 ```bash
-git clone git@github.com:gitgdut/bonded-agent.git
-cd bonded-agent
+git clone git@github.com:zzxwjm/backchannel-monad-playground.git
+cd backchannel-monad-playground
 git checkout feat/http-api
 ```
 
