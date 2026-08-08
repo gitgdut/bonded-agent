@@ -4,23 +4,5 @@
     "name": "Bonded",
     "feeBps": 30,
     "ratio": 0.90
-  },
-  {
-    "address": "0xB2F400E688a21f79F11c7e5c016eEaE436CA9E4C",
-    "name": "Bodier",
-    "feeBps": 30,
-    "ratio": 0.90
-  },
-  {
-    "address": "0xDc17fDad88A81Ce3C28F83b0a1706f535723EfbD",
-    "name": "SwiftSwap",
-    "feeBps": 25,
-    "ratio": 0.92
-  },
-  {
-    "address": "0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B",
-    "name": "SecureTrade",
-    "feeBps": 40,
-    "ratio": 0.95
   }
 ]

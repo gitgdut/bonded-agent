@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"crypto/ecdsa"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"math/big"
@@ -216,7 +217,7 @@ func (a *Agent) OpenPlan(
 	maxCompensation *big.Int,
 	failureCompensation *big.Int,
 	deadline *big.Int,
-) (string, string, error) {
+) (string, string, string, error) {
 	// Build calldata via Moss-style registry: action("swap") → builds the unsigned tx
 	// coverageFloor = guaranteedOutput - maxCompensation → protects the guarantee
 	coverageFloor := new(big.Int).Sub(guaranteedOutput, maxCompensation)
@@ -227,10 +228,10 @@ func (a *Agent) OpenPlan(
 		"minOutput": coverageFloor.String(),
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("build swap calldata: %w", err)
+		return "", "", "", fmt.Errorf("build swap calldata: %w", err)
 	}
 	if swapResult.Node == nil || swapResult.Node.Tx == nil {
-		return "", "", fmt.Errorf("swap action returned no transaction node")
+		return "", "", "", fmt.Errorf("swap action returned no transaction node")
 	}
 
 	calldata := swapResult.Node.Tx.Data
@@ -259,10 +260,11 @@ func (a *Agent) OpenPlan(
 
 	tx, err := a.executor.OpenPlan(a.auth, planID, plan, calldata)
 	if err != nil {
-		return "", "", fmt.Errorf("openPlan tx: %w", err)
+		return "", "", "", fmt.Errorf("openPlan tx: %w", err)
 	}
 
-	return fmt.Sprintf("0x%x", planID), tx.Hash().Hex(), nil
+	calldataHex := "0x" + hex.EncodeToString(calldata)
+	return fmt.Sprintf("0x%x", planID), tx.Hash().Hex(), calldataHex, nil
 }
 
 // OpenPlanQuick is a convenience method that auto-computes expectedOutput and guaranteedOutput.
@@ -270,10 +272,10 @@ func (a *Agent) OpenPlanQuick(
 	user common.Address,
 	inputAmount *big.Int,
 	ratio float64,
-) (string, string, *big.Int, error) {
+) (string, string, *big.Int, *big.Int, string, error) {
 	expected, err := a.SimulateSwap(inputAmount)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("simulate: %w", err)
+		return "", "", nil, nil, "", fmt.Errorf("simulate: %w", err)
 	}
 
 	// Query current service fee (basis points)
@@ -296,19 +298,19 @@ func (a *Agent) OpenPlanQuick(
 	guaranteed.Mul(guaranteed, big.NewInt(int64(ratio*1e9)))
 	guaranteed.Div(guaranteed, big.NewInt(1e9))
 
-	deadline := big.NewInt(time.Now().Unix() + 86400) // 24h
+	deadline := big.NewInt(time.Now().Unix() + 3600) // 1h
 
 	maxComp, _ := new(big.Int).SetString("20000000000000000000", 10)  // 20 tUSDC
 	failComp, _ := new(big.Int).SetString("5000000000000000000", 10)  // 5 tUSDC
 
-	planID, txHash, err := a.OpenPlan(
+	planID, txHash, calldataHex, err := a.OpenPlan(
 		user, inputAmount, expected, guaranteed,
 		maxComp,  // 20 tUSDC max compensation
 		failComp, // 5 tUSDC failure compensation
 		deadline,
 	)
 
-	return planID, txHash, netExpected, err
+	return planID, txHash, netExpected, guaranteed, calldataHex, err
 }
 
 // ── Helpers ─────────────────────────────────────────────────

@@ -53,7 +53,7 @@ func LoadConfig() *Config {
 		DefaultGuaranteeRatio:  parseFloat(getEnv("GUARANTEE_RATIO", "0.90")),
 		DefaultMaxCompensation: parseBig(getEnv("MAX_COMPENSATION", "20000000000000000000")),  // 20 tUSDC
 		DefaultFailureComp:     parseBig(getEnv("FAILURE_COMPENSATION", "5000000000000000000")), // 5 tUSDC
-		DefaultDeadlineSeconds: parseInt(getEnv("DEADLINE_SECONDS", "86400")),                   // 24h
+		DefaultDeadlineSeconds: parseInt(getEnv("DEADLINE_SECONDS", "3600")),                   // 1h
 
 		ERC8004IdentityAddr:   common.HexToAddress(getEnv("ERC8004_IDENTITY_ADDR", "")),
 		ERC8004ReputationAddr: common.HexToAddress(getEnv("ERC8004_REPUTATION_ADDR", "")),

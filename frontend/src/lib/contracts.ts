@@ -11,7 +11,7 @@ export function hasContract(): boolean {
 
 export const PLAN_CONTRACT = PLAN_CONTRACT_ADDRESS as `0x${string}` | "";
 
-/** executePlan 的 calldata — swap(0)，固定不变 */
+/** executePlan 的 calldata — swap(minOutput)，minOutput = coverageFloor，随每个计划参数变化。这里只是 coverageFloor=0 的特例常量，执行时需用计划对应的实际 calldata。 */
 export const SWAP_CALLDATA = "0x94b918de0000000000000000000000000000000000000000000000000000000000000000";
 
 /** BondedExecutor ABI */
@@ -74,6 +74,7 @@ export const planAbi = [
     "outputs": [],
     "stateMutability": "nonpayable"
   },
+  // ── V2 Events (BondedExecutor post-audit) ──────────────────
   {
     "type": "event",
     "name": "PlanOpened",
@@ -81,9 +82,10 @@ export const planAbi = [
       { "name": "planId", "type": "bytes32", "indexed": true },
       { "name": "user", "type": "address", "indexed": true },
       { "name": "operator", "type": "address", "indexed": true },
-      { "name": "guaranteedOutput", "type": "uint256" },
-      { "name": "maxCompensation", "type": "uint256" },
-      { "name": "deadline", "type": "uint256" }
+      { "name": "guaranteedOutput", "type": "uint256", "indexed": false },
+      { "name": "bondDeposited", "type": "uint256", "indexed": false },
+      { "name": "coverageFloor", "type": "uint256", "indexed": false },
+      { "name": "deadline", "type": "uint256", "indexed": false }
     ]
   },
   {
@@ -91,8 +93,9 @@ export const planAbi = [
     "name": "PlanExecuted",
     "inputs": [
       { "name": "planId", "type": "bytes32", "indexed": true },
-      { "name": "actualOutput", "type": "uint256" },
-      { "name": "paidToUser", "type": "uint256" }
+      { "name": "actualOutput", "type": "uint256", "indexed": false },
+      { "name": "userReceived", "type": "uint256", "indexed": false },
+      { "name": "shortfallPaid", "type": "uint256", "indexed": false }
     ]
   },
   {
@@ -100,9 +103,9 @@ export const planAbi = [
     "name": "ShortfallPaid",
     "inputs": [
       { "name": "planId", "type": "bytes32", "indexed": true },
-      { "name": "guaranteed", "type": "uint256" },
-      { "name": "actual", "type": "uint256" },
-      { "name": "shortfall", "type": "uint256" }
+      { "name": "guaranteedOutput", "type": "uint256", "indexed": false },
+      { "name": "actualUserReceived", "type": "uint256", "indexed": false },
+      { "name": "compensationPaid", "type": "uint256", "indexed": false }
     ]
   },
   {
@@ -110,8 +113,9 @@ export const planAbi = [
     "name": "PlanFailed",
     "inputs": [
       { "name": "planId", "type": "bytes32", "indexed": true },
-      { "name": "refundedMON", "type": "uint256" },
-      { "name": "compensationPaid", "type": "uint256" }
+      { "name": "reason", "type": "uint8", "indexed": false },
+      { "name": "refundedMON", "type": "uint256", "indexed": false },
+      { "name": "compensationPaid", "type": "uint256", "indexed": false }
     ]
   },
   {
@@ -120,7 +124,16 @@ export const planAbi = [
     "inputs": [
       { "name": "planId", "type": "bytes32", "indexed": true },
       { "name": "operator", "type": "address", "indexed": true },
-      { "name": "amount", "type": "uint256" }
+      { "name": "amount", "type": "uint256", "indexed": false }
+    ]
+  },
+  {
+    "type": "event",
+    "name": "PlanCancelled",
+    "inputs": [
+      { "name": "planId", "type": "bytes32", "indexed": true },
+      { "name": "operator", "type": "address", "indexed": true },
+      { "name": "bondReturned", "type": "uint256", "indexed": false }
     ]
   },
   {
@@ -131,6 +144,11 @@ export const planAbi = [
   {
     "type": "error",
     "name": "NotPlanUser",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidSignature",
     "inputs": []
   }
 ] as const;

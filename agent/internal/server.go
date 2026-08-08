@@ -41,7 +41,8 @@ type createPlanResponse struct {
 	FailureCompensation string `json:"failureCompensation"`
 	Deadline            int64  `json:"deadline"`
 	Target              string `json:"target"`
-	CalldataHash        string `json:"calldataHash"`
+	Calldata            string `json:"calldata"`      // actual calldata used (swap args)
+	CalldataHash        string `json:"calldataHash"`  // keccak256 of calldata_
 	TxHash              string `json:"txHash"`
 }
 
@@ -56,6 +57,7 @@ type planResponse struct {
 	FailureCompensation string   `json:"failureCompensation"`
 	Deadline            int64    `json:"deadline"`
 	TxHashes            []string `json:"txHashes"`
+	Calldata            string   `json:"calldata,omitempty"`   // swap calldata used in plan
 	ActualOutput        string   `json:"actualOutput,omitempty"`
 	ShortfallPaid       string   `json:"shortfallPaid,omitempty"`
 	Compensation        string   `json:"compensation,omitempty"`
@@ -175,23 +177,16 @@ func (a *Agent) handlePlans(w http.ResponseWriter, r *http.Request) {
 		user = common.HexToAddress(req.UserAddress)
 	}
 
-	planID, txHash, netExpected, err := a.OpenPlanQuick(user, inputAmount, a.cfg.DefaultGuaranteeRatio)
+	planID, txHash, _, guaranteed, swapCalldata, err := a.OpenPlanQuick(user, inputAmount, a.cfg.DefaultGuaranteeRatio)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "CREATE_FAILED", err.Error())
 		return
 	}
 
-	// guaranteed = netExpected * ratio (already computed in OpenPlanQuick)
-	guaranteed := new(big.Int).Set(netExpected)
-	guaranteed.Mul(guaranteed, big.NewInt(int64(a.cfg.DefaultGuaranteeRatio*1e9)))
-	guaranteed.Div(guaranteed, big.NewInt(1e9))
-
 	deadline := time.Now().Add(time.Duration(a.cfg.DefaultDeadlineSeconds) * time.Second)
 
-	calldataHash := ""
-	if h, err := a.getCalldataHash(); err == nil {
-		calldataHash = h
-	}
+	// Compute calldataHash from the actual calldata used in the plan
+	calldataHash := crypto.Keccak256Hash(common.FromHex(swapCalldata)).Hex()
 
 	writeJSON(w, http.StatusOK, createPlanResponse{
 		PlanID:              planID,
@@ -200,6 +195,7 @@ func (a *Agent) handlePlans(w http.ResponseWriter, r *http.Request) {
 		FailureCompensation: a.cfg.DefaultFailureComp.String(),
 		Deadline:            deadline.UnixMilli(),
 		Target:              a.cfg.DexAddr.Hex(),
+		Calldata:            swapCalldata,
 		CalldataHash:        calldataHash,
 		TxHash:              txHash,
 	})

@@ -18,7 +18,10 @@ import {MockUSDC} from "./MockUSDC.sol";
 contract BondedExecutor {
     MockUSDC public immutable tUSDC;
 
-    /// @notice Service fee in basis points (e.g., 30 = 0.3%)
+    /// @notice Contract owner (deployer)
+    address public immutable owner;
+
+    /// @notice Service fee in basis points (e.g., 30 = 0.3%). Fixed to 0 for Demo.
     uint256 public serviceFeeBps;
 
     // ── EIP-712 ─────────────────────────────────────────────────
@@ -141,9 +144,19 @@ contract BondedExecutor {
     error BelowCoverageFloor(uint256 actual, uint256 floor);
     error BondInvariantViolated(uint256 balance, uint256 locked);
 
+    // ── Modifiers ────────────────────────────────────────────────
+    modifier onlyOwner() {
+        require(msg.sender == owner, "only owner");
+        _;
+    }
+
     // ── Constructor ──────────────────────────────────────────────
     constructor(address _tUSDC) {
         tUSDC = MockUSDC(_tUSDC);
+        owner = msg.sender;
+        // Demo: fee fixed at 0. Post-demo, fee can be re-enabled with
+        // per-plan feeBps stored at openPlan time to prevent retroactive changes.
+        serviceFeeBps = 0;
         DOMAIN_SEPARATOR = keccak256(abi.encode(
             EIP712_DOMAIN_TYPEHASH,
             keccak256("BondedExecutor"),
@@ -169,6 +182,9 @@ contract BondedExecutor {
         // Verify uniqueness (per-operator nonce domain)
         if (usedNonces[msg.sender][plan.nonce]) revert NonceAlreadyUsed();
         if (plans[planId].operator != address(0)) revert AlreadyExecuted();
+
+        // Verify operator matches caller (bond comes from msg.sender)
+        if (plan.operator != msg.sender) revert Unauthorized();
 
         // Verify calldata
         if (keccak256(calldata_) != plan.calldataHash) {
@@ -240,23 +256,9 @@ contract BondedExecutor {
     }
 
     /**
-     * @notice Operator cancels an unexecuted plan and recovers bond.
-     */
-    function cancelPlan(bytes32 planId) external {
-        Plan storage plan = plans[planId];
-        if (msg.sender != plan.operator) revert Unauthorized();
-        if (plan.executed) revert AlreadyExecuted();
-
-        plan.executed = true;
-        uint256 bondDeposit = plan.maxCompensation > plan.failureCompensation
-            ? plan.maxCompensation
-            : plan.failureCompensation;
-        _releaseFullBond(planId, plan);
-        emit PlanCancelled(planId, plan.operator, bondDeposit);
-    }
-
-    /**
      * @notice Anyone can cancel an expired plan — bond returns to operator.
+     *         Plans CANNOT be cancelled before expiry. This ensures the
+     *         guarantee is binding until the deadline.
      */
     function cancelExpiredPlan(bytes32 planId) external {
         Plan storage plan = plans[planId];
@@ -285,7 +287,7 @@ contract BondedExecutor {
 
     // ── Admin ───────────────────────────────────────────────────
 
-    function setServiceFee(uint256 _feeBps) external {
+    function setServiceFee(uint256 _feeBps) external onlyOwner {
         if (_feeBps > 100) revert FeeTooHigh();
         uint256 old = serviceFeeBps;
         serviceFeeBps = _feeBps;
@@ -314,14 +316,21 @@ contract BondedExecutor {
     }
 
     /**
-     * @notice Try/catch swap execution with coverage floor.
+     * @notice Swap execution with coverage floor check.
      *
-     *         Outer: calls inner, catches revert → PlanFailed
-     *         Inner: executes swap, checks output >= coverageFloor
+     *         Calls target with input MON, measures tUSDC output.
+     *         Revert or output < coverageFloor → PlanFailed.
+     *         Output >= coverageFloor → settle with actual output.
      *
-     *         coverageFloor = guaranteedOutput - maxCompensation
+     *         coverageFloor = guaranteedOutput - maxCompensation.
      *         If swap output < coverageFloor, the bond isn't enough to cover
      *         the shortfall — cheaper to refund + pay failureCompensation.
+     *
+     *         NOTE: Assumes the target DEX reverts when minOutput cannot be
+     *         met. SimpleAMMPair satisfies this. For non-compliant DEXes,
+     *         use a self-call + try/catch to atomically revert and prevent
+     *         MON loss. With serviceFeeBps=0 (Demo), userAmount=actualOutput
+     *         eliminates the pre/post-fee coverage gap.
      */
     function _executeSwapWithCoverage(
         bytes32 planId,

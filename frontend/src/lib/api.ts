@@ -86,6 +86,7 @@ function mockCreatePlan(req: CreatePlanRequest): CreatePlanResponse {
     failureCompensation: failComp.toString(),
     deadline: now + req.deadlineMinutes * 60_000,
     target: "0x0000000000000000000000000000000000000000",
+    calldata: "0x",
     calldataHash: `0x${"ab".repeat(32)}`,
     txHash: `0x${"12".repeat(32)}`,
     isMock: true,

@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSignTypedData } from "wagmi";
+import { useAccount, useWaitForTransactionReceipt, useSignTypedData } from "wagmi";
 import { decodeEventLog } from "viem";
-import { planAbi, hasContract, PLAN_CONTRACT, SWAP_CALLDATA } from "@/lib/contracts";
+import { planAbi, hasContract, PLAN_CONTRACT } from "@/lib/contracts";
 import { API_BASE_URL } from "@/lib/config";
 import type { Plan } from "@/lib/types";
 
@@ -37,6 +37,7 @@ export interface ExecuteResult {
 
 /**
  * Parse transaction receipt logs to determine the actual swap outcome.
+ * V2 event format (BondedExecutor post-audit).
  * Returns null if no recognizable BondedExecutor events are found.
  */
 function parseReceiptLogs(
@@ -44,8 +45,8 @@ function parseReceiptLogs(
 ): { status: "settled_ok" | "settled_shortfall" | "failed"; actualOutput?: string; compensation?: string; shortfallPaid?: string } | null {
   let isFailed = false;
   let actualOutput: string | undefined;
-  let paidToUser: string | undefined;
-  let shortfallPaid: string | undefined;
+  let userReceived: string | undefined;
+  let shortfallFromExecuted: string | undefined;
   let compensationPaid: string | undefined;
 
   for (const log of logs) {
@@ -61,9 +62,13 @@ function parseReceiptLogs(
         compensationPaid = (decoded.args as any).compensationPaid?.toString();
       } else if (decoded.eventName === "PlanExecuted") {
         actualOutput = (decoded.args as any).actualOutput?.toString();
-        paidToUser = (decoded.args as any).paidToUser?.toString();
+        // V2: field renamed from paidToUser → userReceived
+        userReceived = (decoded.args as any).userReceived?.toString();
+        // V2: shortfallPaid on PlanExecuted is non-zero when shortfall occurred
+        shortfallFromExecuted = (decoded.args as any).shortfallPaid?.toString();
       } else if (decoded.eventName === "ShortfallPaid") {
-        shortfallPaid = (decoded.args as any).shortfall?.toString();
+        // V2: field renamed from shortfall → compensationPaid
+        compensationPaid = (decoded.args as any).compensationPaid?.toString();
       }
     } catch {
       // Not a BondedExecutor event, skip
@@ -78,12 +83,12 @@ function parseReceiptLogs(
   }
 
   if (actualOutput !== undefined) {
-    const hasShortfall = paidToUser && BigInt(paidToUser) > 0n;
+    const hasShortfall = shortfallFromExecuted && BigInt(shortfallFromExecuted) > 0n;
     return {
       status: hasShortfall ? "settled_shortfall" : "settled_ok",
       actualOutput,
-      compensation: hasShortfall ? paidToUser : undefined,
-      shortfallPaid: hasShortfall ? (shortfallPaid ?? paidToUser) : undefined,
+      compensation: hasShortfall ? shortfallFromExecuted : undefined,
+      shortfallPaid: hasShortfall ? (compensationPaid ?? shortfallFromExecuted) : undefined,
     };
   }
 
@@ -100,7 +105,6 @@ function parseReceiptLogs(
  */
 export function useExecutePlan(plan: Plan | undefined) {
   const { address } = useAccount();
-  const { writeContractAsync } = useWriteContract();
   const { signTypedDataAsync } = useSignTypedData();
   const [txHash, setTxHash] = useState<`0x${string}` | undefined>();
   const [receiptResult, setReceiptResult] = useState<ExecuteResult | null>(null);
@@ -129,44 +133,14 @@ export function useExecutePlan(plan: Plan | undefined) {
         txHash: txHash,
       });
     } else {
-      // Receipt succeeded but no recognizable events — fallback to settled_ok
-      // (should not normally happen with BondedExecutor)
+      // Receipt succeeded but no recognizable events — this should not happen
+      // with BondedExecutor V2. Treat as unknown failure rather than false settled_ok.
       setReceiptResult({
-        status: "settled_ok",
+        status: "failed",
         txHash: txHash,
       });
     }
   }, [receipt, plan, receiptResult, txHash]);
-
-  const execute = useCallback(async (): Promise<ExecuteResult> => {
-    if (!plan) throw new Error("计划数据缺失");
-
-    // ---- Real mode: contract configured ----
-    if (hasContract() && planAbi.length > 0) {
-      const hash = await writeContractAsync({
-        address: PLAN_CONTRACT as `0x${string}`,
-        abi: planAbi,
-        functionName: "executePlan",
-        args: [plan.planId as `0x${string}`, SWAP_CALLDATA],
-        value: BigInt(plan.inputAmount),
-      });
-      setTxHash(hash);
-      setReceiptResult(null); // reset for new attempt
-      return { status: "executing", txHash: hash };
-    }
-
-    // ---- Demo mode: simulate execution & settlement ----
-    await new Promise((r) => setTimeout(r, 1200));
-    const fakeHash = `0x${"ab".repeat(32)}`;
-    // In demo mode, randomly simulate different outcomes for testing
-    const fakeResult: ExecuteResult = {
-      status: "settled_ok",
-      actualOutput: plan.guaranteedOutput,
-      txHash: fakeHash,
-    };
-    setReceiptResult(fakeResult);
-    return fakeResult;
-  }, [plan, writeContractAsync]);
 
   const executeWithSignature = useCallback(async (): Promise<ExecuteResult> => {
     if (!plan || !address) throw new Error("计划数据缺失或未连接钱包");
@@ -230,7 +204,6 @@ export function useExecutePlan(plan: Plan | undefined) {
   }, [receiptResult, txHash, waitLoading]);
 
   return {
-    execute,
     executeWithSignature,
     isConfirming: !!txHash && waitLoading,
     result,

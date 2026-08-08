@@ -84,14 +84,11 @@ func main() {
 		}
 
 		fmt.Printf("Creating plan for %s...\n", user.Hex())
-		planID, txHash, expected, err := agent.OpenPlanQuick(user, amount, ratio)
+		planID, txHash, expected, guaranteed, _, err := agent.OpenPlanQuick(user, amount, ratio)
 		if err != nil {
 			log.Fatalf("OpenPlan: %v", err)
 		}
 
-		guaranteed := new(big.Int).Set(expected)
-		guaranteed.Mul(guaranteed, big.NewInt(int64(ratio*1e9)))
-		guaranteed.Div(guaranteed, big.NewInt(1e9))
 
 		fmt.Printf("┌─ Plan Created ──────────────────────\n")
 		fmt.Printf("│ Plan ID:   %s\n", planID)

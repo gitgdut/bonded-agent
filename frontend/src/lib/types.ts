@@ -43,6 +43,7 @@ export interface CreatePlanResponse {
   failureCompensation: string; // wei,失败补偿
   deadline: number; // 截止时间戳(ms)
   target: string; // 目标合约地址
+  calldata: string; // 实际 swap calldata (含 coverageFloor)
   calldataHash: string;
   txHash: string; // 开计划交易哈希
   isMock?: boolean;
