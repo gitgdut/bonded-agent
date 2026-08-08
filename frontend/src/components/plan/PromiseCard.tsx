@@ -21,12 +21,14 @@ export function PromiseCard({
   executing,
   wrongWallet,
   onExecute,
+  onGaslessExecute,
 }: {
   plan: Plan;
   status: PlanStatus;
   executing?: boolean;
   wrongWallet?: boolean;
   onExecute?: () => void;
+  onGaslessExecute?: () => void;
 }) {
   const [now, setNow] = useState<number>();
 
@@ -142,6 +144,16 @@ export function PromiseCard({
           >
             {actionLabel}
           </Button>
+          {onGaslessExecute && status === "open" && !executing && (
+            <Button
+              className="w-full mt-2"
+              variant="secondary"
+              disabled={wrongWallet}
+              onClick={onGaslessExecute}
+            >
+              免 Gas 执行 (EIP-712)
+            </Button>
+          )}
           {wrongWallet && !executing && (
             <p className="mt-2 flex items-center justify-center gap-1.5 text-xs text-shortfall">
               <StatusDot color="shortfall" />

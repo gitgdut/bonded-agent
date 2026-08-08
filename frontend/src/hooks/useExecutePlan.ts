@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { useAccount, useWaitForTransactionReceipt, useSignTypedData } from "wagmi";
+import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSignTypedData } from "wagmi";
 import { decodeEventLog } from "viem";
 import { planAbi, hasContract, PLAN_CONTRACT } from "@/lib/contracts";
 import { API_BASE_URL } from "@/lib/config";
@@ -105,6 +105,7 @@ function parseReceiptLogs(
  */
 export function useExecutePlan(plan: Plan | undefined) {
   const { address } = useAccount();
+  const { writeContractAsync } = useWriteContract();
   const { signTypedDataAsync } = useSignTypedData();
   const [txHash, setTxHash] = useState<`0x${string}` | undefined>();
   const [receiptResult, setReceiptResult] = useState<ExecuteResult | null>(null);
@@ -141,6 +142,36 @@ export function useExecutePlan(plan: Plan | undefined) {
       });
     }
   }, [receipt, plan, receiptResult, txHash]);
+
+  const execute = useCallback(async (): Promise<ExecuteResult> => {
+    if (!plan) throw new Error("计划数据缺失");
+    if (!plan.calldata) throw new Error("calldata 缺失，请先创建计划");
+
+    // ---- Real mode: user pays MON directly, contract settles atomically ----
+    if (hasContract() && planAbi.length > 0) {
+      const hash = await writeContractAsync({
+        address: PLAN_CONTRACT as `0x${string}`,
+        abi: planAbi,
+        functionName: "executePlan",
+        args: [plan.planId as `0x${string}`, plan.calldata as `0x${string}`],
+        value: BigInt(plan.inputAmount),
+      });
+      setTxHash(hash);
+      setReceiptResult(null);
+      return { status: "executing", txHash: hash };
+    }
+
+    // ---- Demo mode ----
+    await new Promise((r) => setTimeout(r, 1200));
+    const fakeHash = `0x${"ab".repeat(32)}`;
+    const fakeResult: ExecuteResult = {
+      status: "settled_ok",
+      actualOutput: plan.guaranteedOutput,
+      txHash: fakeHash,
+    };
+    setReceiptResult(fakeResult);
+    return fakeResult;
+  }, [plan, writeContractAsync]);
 
   const executeWithSignature = useCallback(async (): Promise<ExecuteResult> => {
     if (!plan || !address) throw new Error("计划数据缺失或未连接钱包");
@@ -204,6 +235,7 @@ export function useExecutePlan(plan: Plan | undefined) {
   }, [receiptResult, txHash, waitLoading]);
 
   return {
+		execute,
     executeWithSignature,
     isConfirming: !!txHash && waitLoading,
     result,

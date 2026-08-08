@@ -23,7 +23,7 @@ export default function PlanPage() {
 
   const { plan, status, isLoading, error } = usePlan(planId);
   const { address } = useAccount();
-  const { executeWithSignature, isConfirming, result: execResult } = useExecutePlan(plan);
+  const { execute, executeWithSignature, isConfirming, result: execResult } = useExecutePlan(plan);
 
   const [execError, setExecError] = useState<unknown>();
 
@@ -63,6 +63,15 @@ export default function PlanPage() {
   const handleExecute = async () => {
     setExecError(undefined);
     try {
+      await execute();
+    } catch (e) {
+      setExecError(e);
+    }
+  };
+
+  const handleGaslessExecute = async () => {
+    setExecError(undefined);
+    try {
       await executeWithSignature();
     } catch (e) {
       setExecError(e);
@@ -100,6 +109,7 @@ export default function PlanPage() {
         executing={isConfirming || execResult?.status === "executing"}
         wrongWallet={wrongWallet}
         onExecute={handleExecute}
+        onGaslessExecute={handleGaslessExecute}
       />
       <SettlementExplanation plan={displayPlan} />
       <ErrorBanner error={execError} />

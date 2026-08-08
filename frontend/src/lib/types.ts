@@ -60,6 +60,7 @@ export interface Plan {
   maxCompensation: string; // wei,最大赔付
   failureCompensation: string; // wei,失败补偿
   deadline: number; // 截止时间戳(ms)
+  calldata?: string; // swap calldata (用于前端直接 executePlan)
   txHashes: string[]; // 相关交易哈希列表
   actualOutput?: string; // wei,结算后实际到账
   shortfallPaid?: string; // wei,自动补足差额

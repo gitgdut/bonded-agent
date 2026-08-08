@@ -356,9 +356,12 @@ contract BondedExecutor {
         uint256 actualOutput = balanceAfter - balanceBefore;
 
         // ── Check coverage floor ────────────────────────────────
+        // If output is below coverage floor, the bond can't cover the
+        // shortfall. Instead of spending MON and recording a phantom refund
+        // (the old SettleSwapFailed path), revert the entire call atomically:
+        // MON stays with the caller, bond stays locked, nothing changes.
         if (actualOutput < coverageFloor) {
-            _settleSwapFailed(planId, plan, FailureReason.OutputBelowCoverage);
-            return;
+            revert BelowCoverageFloor(actualOutput, coverageFloor);
         }
 
         // ── Success path: settle with actual output ─────────────

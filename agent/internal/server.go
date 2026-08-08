@@ -12,7 +12,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/gitgdut/bonded-agent/agent/contracts"
 	"github.com/gitgdut/bonded-agent/agent/internal/protocols"
 )
 
@@ -246,6 +245,21 @@ func (a *Agent) handlePlanByID(w http.ResponseWriter, r *http.Request) {
 		status = "expired"
 	}
 
+		// Reconstruct calldata from plan params (for frontend direct executePlan)
+		calldataHex := ""
+		if !plan.Executed {
+			coverageFloor := new(big.Int).Sub(plan.GuaranteedOutput, plan.MaxCompensation)
+			if coverageFloor.Sign() < 0 {
+				coverageFloor = big.NewInt(0)
+			}
+			swapResult, err := a.registry.Action("simple-amm", "swap", a.cfg.BondedExecutor, map[string]interface{}{
+				"minOutput": coverageFloor.String(),
+			})
+			if err == nil && swapResult.Node != nil && swapResult.Node.Tx != nil {
+				calldataHex = "0x" + hex.EncodeToString(swapResult.Node.Tx.Data)
+			}
+		}
+
 	resp := planResponse{
 		PlanID:              fmt.Sprintf("0x%x", planID),
 		Status:              status,
@@ -256,6 +270,7 @@ func (a *Agent) handlePlanByID(w http.ResponseWriter, r *http.Request) {
 		MaxCompensation:     plan.MaxCompensation.String(),
 		FailureCompensation: plan.FailureCompensation.String(),
 		Deadline:            plan.Deadline.Int64() * 1000,
+			Calldata:            calldataHex,
 		TxHashes:            []string{},
 		ActualOutput:        settlement.actualOutput,
 		ShortfallPaid:       settlement.shortfallPaid,
@@ -534,19 +549,6 @@ func (a *Agent) handleIdentity(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── Helpers ─────────────────────────────────────────────────
-
-func (a *Agent) getCalldataHash() (string, error) {
-	swapABI, err := contracts.SimpleAMMPairMetaData.GetAbi()
-	if err != nil {
-		return "", err
-	}
-	calldata, err := swapABI.Pack("swap", big.NewInt(0))
-	if err != nil {
-		return "", err
-	}
-	hash := crypto.Keccak256Hash(calldata)
-	return hash.Hex(), nil
-}
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
