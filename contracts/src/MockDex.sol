@@ -54,6 +54,11 @@ contract MockDex {
         return output;
     }
 
+    /// @notice Quote expected output (SimpleAMMPair-compatible interface)
+    function getAmountOut(uint256 amountIn) external view returns (uint256) {
+        return (amountIn * rate) / 1e18;
+    }
+
     /// @notice Allow the contract to receive MON directly
     receive() external payable {}
 }
