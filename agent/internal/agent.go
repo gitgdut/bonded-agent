@@ -218,8 +218,13 @@ func (a *Agent) OpenPlan(
 	deadline *big.Int,
 ) (string, string, error) {
 	// Build calldata via Moss-style registry: action("swap") → builds the unsigned tx
+	// coverageFloor = guaranteedOutput - maxCompensation → protects the guarantee
+	coverageFloor := new(big.Int).Sub(guaranteedOutput, maxCompensation)
+	if coverageFloor.Sign() < 0 {
+		coverageFloor = big.NewInt(0)
+	}
 	swapResult, err := a.registry.Action("simple-amm", "swap", a.cfg.BondedExecutor, map[string]interface{}{
-		"minOutput": "0",
+		"minOutput": coverageFloor.String(),
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("build swap calldata: %w", err)
@@ -234,7 +239,7 @@ func (a *Agent) OpenPlan(
 
 	// Compute planID = keccak256(abi.encode(user, operator, nonce))
 	nonce := big.NewInt(time.Now().UnixNano())
-	planID := computePlanID(user, a.address, nonce)
+	planID := computePlanID(a.address, nonce)
 
 	// Build plan struct
 	plan := contracts.BondedExecutorPlan{
@@ -322,9 +327,13 @@ func (a *Agent) ExecutePlan(planID [32]byte) (string, error) {
 		return "", fmt.Errorf("plan not found")
 	}
 
-	// Build calldata via Moss-style registry (must match what OpenPlan stored)
+	// Build calldata with coverageFloor = guaranteedOutput - maxCompensation
+	coverageFloor := new(big.Int).Sub(plan.GuaranteedOutput, plan.MaxCompensation)
+	if coverageFloor.Sign() < 0 {
+		coverageFloor = big.NewInt(0)
+	}
 	swapResult, err := a.registry.Action("simple-amm", "swap", a.cfg.BondedExecutor, map[string]interface{}{
-		"minOutput": "0",
+		"minOutput": coverageFloor.String(),
 	})
 	if err != nil {
 		return "", fmt.Errorf("build swap calldata: %w", err)
@@ -359,9 +368,13 @@ func (a *Agent) ExecutePlanWithSignature(planID [32]byte, deadline int64, signat
 		return "", fmt.Errorf("plan not found")
 	}
 
-	// Build calldata via Moss-style registry (must match what OpenPlan stored)
+	// Build calldata with coverageFloor = guaranteedOutput - maxCompensation
+	coverageFloor := new(big.Int).Sub(plan.GuaranteedOutput, plan.MaxCompensation)
+	if coverageFloor.Sign() < 0 {
+		coverageFloor = big.NewInt(0)
+	}
 	swapResult, err := a.registry.Action("simple-amm", "swap", a.cfg.BondedExecutor, map[string]interface{}{
-		"minOutput": "0",
+		"minOutput": coverageFloor.String(),
 	})
 	if err != nil {
 		return "", fmt.Errorf("build swap calldata: %w", err)
@@ -382,17 +395,15 @@ func (a *Agent) ExecutePlanWithSignature(planID [32]byte, deadline int64, signat
 	return tx.Hash().Hex(), nil
 }
 
-// computePlanID = keccak256(abi.encode(user, operator, nonce))
-func computePlanID(user, operator common.Address, nonce *big.Int) [32]byte {
-	// abi.encode(address,address,uint256)
-	data := make([]byte, 0, 32+32+32)
+// computePlanID = keccak256(abi.encode(operator, nonce)) — per-operator uniqueness
+func computePlanID(operator common.Address, nonce *big.Int) [32]byte {
+	// abi.encode(address,uint256)
+	data := make([]byte, 0, 32+32)
 
-	// pad addresses to 32 bytes
-	paddedUser := common.LeftPadBytes(user.Bytes(), 32)
+	// pad address to 32 bytes
 	paddedOp := common.LeftPadBytes(operator.Bytes(), 32)
 	paddedNonce := common.LeftPadBytes(nonce.Bytes(), 32)
 
-	data = append(data, paddedUser...)
 	data = append(data, paddedOp...)
 	data = append(data, paddedNonce...)
 

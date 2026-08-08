@@ -115,7 +115,7 @@ func (e *ReputationEngine) scanHistory() error {
 		s := e.EnsureStats(operator)
 		e.mu.Lock()
 		s.SuccessPlans++
-		if ev.PaidToUser != nil && ev.PaidToUser.Sign() > 0 {
+		if ev.ShortfallPaid != nil && ev.ShortfallPaid.Sign() > 0 {
 			s.ShortfallPlans++
 		}
 		e.mu.Unlock()

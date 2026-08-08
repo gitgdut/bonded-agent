@@ -336,9 +336,9 @@ func (a *Agent) queryPlanSettlement(planID [32]byte) planSettlement {
 				s.actualOutput = ev.ActualOutput.String()
 			}
 			// If paidToUser > 0, there was a shortfall
-			if ev.PaidToUser != nil && ev.PaidToUser.Sign() > 0 {
+			if ev.ShortfallPaid != nil && ev.ShortfallPaid.Sign() > 0 {
 				s.status = "settled_shortfall"
-				s.compensation = ev.PaidToUser.String()
+				s.compensation = ev.ShortfallPaid.String()
 			}
 		}
 	}
@@ -350,8 +350,8 @@ func (a *Agent) queryPlanSettlement(planID [32]byte) planSettlement {
 			defer shortIter.Close()
 			for shortIter.Next() {
 				ev := shortIter.Event
-				if ev.Shortfall != nil {
-					s.shortfallPaid = ev.Shortfall.String()
+				if ev.CompensationPaid != nil {
+					s.shortfallPaid = ev.CompensationPaid.String()
 				}
 			}
 		}

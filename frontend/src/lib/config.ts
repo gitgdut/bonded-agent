@@ -39,5 +39,9 @@ export const OUTPUT_TOKEN = "tUSDC";
 export const DEFAULT_INPUT_AMOUNT = "1";
 export const DEFAULT_DEADLINE_MINUTES = 15;
 
+/** 保证金参数（与后端 MAX_COMPENSATION 对齐，单位 wei） */
+export const MAX_COMPENSATION = "20000000000000000000"; // 20 tUSDC
+export const FAILURE_COMPENSATION = "5000000000000000000"; // 5 tUSDC
+
 /** mock 请求模拟延迟(ms) */
 export const MOCK_API_DELAY_MS = 600;

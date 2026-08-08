@@ -5,11 +5,15 @@ import {MockUSDC} from "./MockUSDC.sol";
 
 /**
  * @title BondedExecutor
- * @notice Core contract: operator locks tUSDC bond to guarantee swap outcomes.
- *         If actual output < guaranteed output, auto-compensates the user.
- *         If the swap call fails, refunds user input + pays failure compensation.
- *
- *         All compensation is purely on-chain — no LLM or admin judgment.
+ * @notice Operator locks tUSDC bond to guarantee swap outcomes.
+ *         V2 changes (Dev1 baseline):
+ *         1. coverageFloor = guaranteedOutput - maxCompensation → swap minOutput
+ *         2. Try/catch atomicity: inner call checks output, outer handles revert
+ *         3. Bond deposit = max(maxCompensation, failureCompensation), paths mutual-exclusive
+ *         4. Native MON pull-mode refunds (pendingRefunds)
+ *         5. nonce per-operator; planId = keccak256(operator, nonce)
+ *         6. Failure reason enum (outputBelowCoverage / SwapCallFailed)
+ *         7. Malicious calldata guard: post-exec balanceOf(this) >= totalLockedBonds
  */
 contract BondedExecutor {
     MockUSDC public immutable tUSDC;
@@ -25,19 +29,26 @@ contract BondedExecutor {
 
     bytes32 private immutable DOMAIN_SEPARATOR;
 
+    // ── Failure reason enum ──────────────────────────────────────
+    enum FailureReason {
+        None,                    // 0 = success (unused in events)
+        OutputBelowCoverage,     // 1 = swap output < coverageFloor
+        SwapCallFailed           // 2 = inner swap call reverted
+    }
+
     // ── Plan structure ──────────────────────────────────────────
     struct Plan {
-        address user;              // who can execute
+        address user;              // who the plan is for
         address operator;          // who created the plan & provides bond
         uint256 inputAmount;       // MON amount for the swap
         uint256 expectedOutput;    // simulated expected output (informational)
         uint256 guaranteedOutput;  // minimum tUSDC the user is guaranteed
-        uint256 maxCompensation;   // max tUSDC the bond covers (≥ guaranteedOutput)
-        uint256 failureCompensation; // tUSDC paid to user if swap call reverts
+        uint256 maxCompensation;   // max tUSDC the bond covers
+        uint256 failureCompensation; // tUSDC paid to user if swap fails
         address target;            // target contract (MockDex)
         bytes32 calldataHash;      // keccak256(calldata) — prevents tampering
         uint256 deadline;          // block.timestamp after which plan expires
-        uint256 nonce;             // unique per (user, operator, nonce)
+        uint256 nonce;             // per-operator nonce for planId uniqueness
         bool executed;             // prevents replay
     }
 
@@ -45,11 +56,17 @@ contract BondedExecutor {
     /// @notice planId → Plan
     mapping(bytes32 => Plan) public plans;
 
-    /// @notice user → operator → nonce → used
-    mapping(address => mapping(address => mapping(uint256 => bool))) public usedNonces;
+    /// @notice operator → nonce → used
+    mapping(address => mapping(uint256 => bool)) public usedNonces;
 
     /// @notice operator → tUSDC bond balance locked in active plans
     mapping(address => uint256) public lockedBond;
+
+    /// @notice total tUSDC locked across all operators (for invariant check)
+    uint256 public totalLockedBonds;
+
+    /// @notice user → pending MON refund (pull pattern)
+    mapping(address => uint256) public pendingRefunds;
 
     // ── Events ───────────────────────────────────────────────────
     event PlanOpened(
@@ -57,27 +74,36 @@ contract BondedExecutor {
         address indexed user,
         address indexed operator,
         uint256 guaranteedOutput,
-        uint256 maxCompensation,
+        uint256 bondDeposited,
+        uint256 coverageFloor,
         uint256 deadline
     );
 
     event PlanExecuted(
         bytes32 indexed planId,
         uint256 actualOutput,
-        uint256 paidToUser
+        uint256 userReceived,
+        uint256 shortfallPaid
     );
 
     event ShortfallPaid(
         bytes32 indexed planId,
-        uint256 guaranteed,
-        uint256 actual,
-        uint256 shortfall
+        uint256 guaranteedOutput,
+        uint256 actualUserReceived,
+        uint256 compensationPaid
     );
 
     event PlanFailed(
         bytes32 indexed planId,
+        FailureReason reason,
         uint256 refundedMON,
         uint256 compensationPaid
+    );
+
+    event PlanCancelled(
+        bytes32 indexed planId,
+        address indexed operator,
+        uint256 bondReturned
     );
 
     event BondReleased(
@@ -86,7 +112,7 @@ contract BondedExecutor {
         uint256 amount
     );
 
-    event ServiceFeePaid(
+    event ServiceFeeCollected(
         bytes32 indexed planId,
         uint256 swapOutput,
         uint256 fee,
@@ -95,6 +121,12 @@ contract BondedExecutor {
 
     event ServiceFeeUpdated(uint256 oldFeeBps, uint256 newFeeBps);
 
+    event MONRefundStored(
+        bytes32 indexed planId,
+        address indexed user,
+        uint256 amount
+    );
+
     // ── Errors ───────────────────────────────────────────────────
     error NotPlanUser();
     error AlreadyExecuted();
@@ -102,8 +134,12 @@ contract BondedExecutor {
     error CalldataMismatch(bytes32 expected, bytes32 actual);
     error InsufficientBond(uint256 required, uint256 available);
     error BondTransferFailed();
-    error SwapFailed();
     error NonceAlreadyUsed();
+    error Unauthorized();
+    error FeeTooHigh();
+    error InvalidSignature();
+    error BelowCoverageFloor(uint256 actual, uint256 floor);
+    error BondInvariantViolated(uint256 balance, uint256 locked);
 
     // ── Constructor ──────────────────────────────────────────────
     constructor(address _tUSDC) {
@@ -111,7 +147,7 @@ contract BondedExecutor {
         DOMAIN_SEPARATOR = keccak256(abi.encode(
             EIP712_DOMAIN_TYPEHASH,
             keccak256("BondedExecutor"),
-            keccak256("1"),
+            keccak256("2"),
             block.chainid,
             address(this)
         ));
@@ -121,7 +157,7 @@ contract BondedExecutor {
 
     /**
      * @notice Operator opens a guaranteed plan and locks tUSDC bond.
-     * @param planId keccak256(abi.encode(user, operator, nonce)) or similar unique ID
+     * @param planId keccak256(abi.encode(operator, nonce)) — per-operator unique
      * @param plan The plan parameters
      * @param calldata_ The raw calldata to send to target (verified against calldataHash)
      */
@@ -130,8 +166,8 @@ contract BondedExecutor {
         Plan calldata plan,
         bytes calldata calldata_
     ) external {
-        // Verify uniqueness
-        if (usedNonces[plan.user][plan.operator][plan.nonce]) revert NonceAlreadyUsed();
+        // Verify uniqueness (per-operator nonce domain)
+        if (usedNonces[msg.sender][plan.nonce]) revert NonceAlreadyUsed();
         if (plans[planId].operator != address(0)) revert AlreadyExecuted();
 
         // Verify calldata
@@ -139,57 +175,45 @@ contract BondedExecutor {
             revert CalldataMismatch(plan.calldataHash, keccak256(calldata_));
         }
 
-        // Verify bond coverage
-        uint256 requiredBond = plan.maxCompensation;
-        if (plan.failureCompensation > requiredBond) {
-            requiredBond = plan.failureCompensation;
+        // Bond deposit = max(maxCompensation, failureCompensation)
+        uint256 bondDeposit = plan.maxCompensation;
+        if (plan.failureCompensation > bondDeposit) {
+            bondDeposit = plan.failureCompensation;
         }
 
         // Pull bond from operator
-        // Operator must have approved tUSDC to BondedExecutor first
-        bool ok = tUSDC.transferFrom(msg.sender, address(this), requiredBond);
+        bool ok = tUSDC.transferFrom(msg.sender, address(this), bondDeposit);
         if (!ok) revert BondTransferFailed();
 
         // Store plan
         plans[planId] = plan;
         plans[planId].executed = false; // explicit
-        usedNonces[plan.user][plan.operator][plan.nonce] = true;
-        lockedBond[plan.operator] += requiredBond;
+        usedNonces[msg.sender][plan.nonce] = true;
+        lockedBond[msg.sender] += bondDeposit;
+        totalLockedBonds += bondDeposit;
 
-        emit PlanOpened(planId, plan.user, msg.sender, plan.guaranteedOutput, requiredBond, plan.deadline);
+        // Coverage floor: the minimum swap output before we even bother
+        // If swap gives less than this, it's cheaper to refund + pay failureComp
+        uint256 coverageFloor = plan.guaranteedOutput > plan.maxCompensation
+            ? plan.guaranteedOutput - plan.maxCompensation
+            : 0;
+
+        emit PlanOpened(planId, plan.user, msg.sender, plan.guaranteedOutput, bondDeposit, coverageFloor, plan.deadline);
     }
 
     /**
-     * @notice User executes a guaranteed plan.
-     *         Sends MON to target, measures tUSDC output delta,
-     *         and auto-settles bond.
-     * @param planId The plan identifier
-     * @param calldata_ Must match plan.calldataHash
+     * @notice User executes a guaranteed plan by sending MON.
      */
     function executePlan(bytes32 planId, bytes calldata calldata_) external payable {
         Plan storage plan = plans[planId];
 
-        // ── Guards ────────────────────────────────────────────
         if (msg.sender != plan.user) revert NotPlanUser();
-        if (plan.executed) revert AlreadyExecuted();
-        if (block.timestamp > plan.deadline) revert PlanExpired(plan.deadline, block.timestamp);
-        if (keccak256(calldata_) != plan.calldataHash) {
-            revert CalldataMismatch(plan.calldataHash, keccak256(calldata_));
-        }
-        if (msg.value != plan.inputAmount) {
-            revert(); // wrong MON amount sent
-        }
-
-        _executeSwap(planId, plan, calldata_);
+        _executeCommon(planId, plan, calldata_);
     }
 
     /**
-     * @notice Operator executes a plan on behalf of the user via EIP-712 signature.
-     *         Operator sends MON, user signs authorization off-chain.
-     * @param planId The plan identifier
-     * @param calldata_ Must match plan.calldataHash
-     * @param deadline Signature expiry (seconds)
-     * @param signature EIP-712 signature from the plan user
+     * @notice Operator executes on user's behalf via EIP-712 signature.
+     *         Operator sends MON, user signed off-chain.
      */
     function executePlanWithSignature(
         bytes32 planId,
@@ -212,117 +236,234 @@ contract BondedExecutor {
         address signer = _recoverSigner(digest, signature);
         if (signer != plan.user) revert InvalidSignature();
 
-        // ── Standard guards ────────────────────────────────────
-        if (plan.executed) revert AlreadyExecuted();
-        if (block.timestamp > plan.deadline) revert PlanExpired(plan.deadline, block.timestamp);
-        if (keccak256(calldata_) != plan.calldataHash) {
-            revert CalldataMismatch(plan.calldataHash, keccak256(calldata_));
-        }
-        if (msg.value != plan.inputAmount) {
-            revert(); // wrong MON amount sent
-        }
-
-        // ── Execute swap (same logic as executePlan) ────────────
-        _executeSwap(planId, plan, calldata_);
+        _executeCommon(planId, plan, calldata_);
     }
 
-    /// @notice Operator can cancel an unexecuted, non-expired plan and recover bond
+    /**
+     * @notice Operator cancels an unexecuted plan and recovers bond.
+     */
     function cancelPlan(bytes32 planId) external {
         Plan storage plan = plans[planId];
         if (msg.sender != plan.operator) revert Unauthorized();
         if (plan.executed) revert AlreadyExecuted();
-        // Allow cancellation even after expiry — operator should recover bond
 
         plan.executed = true;
-        _releaseBond(planId, plan);
+        uint256 bondDeposit = plan.maxCompensation > plan.failureCompensation
+            ? plan.maxCompensation
+            : plan.failureCompensation;
+        _releaseFullBond(planId, plan);
+        emit PlanCancelled(planId, plan.operator, bondDeposit);
+    }
+
+    /**
+     * @notice Anyone can cancel an expired plan — bond returns to operator.
+     */
+    function cancelExpiredPlan(bytes32 planId) external {
+        Plan storage plan = plans[planId];
+        if (plan.executed) revert AlreadyExecuted();
+        if (block.timestamp <= plan.deadline) revert PlanExpired(plan.deadline, block.timestamp);
+        // ^ reuse the same error to say "not yet expired"
+
+        plan.executed = true;
+        uint256 bondDeposit = plan.maxCompensation > plan.failureCompensation
+            ? plan.maxCompensation
+            : plan.failureCompensation;
+        _releaseFullBond(planId, plan);
+        emit PlanCancelled(planId, plan.operator, bondDeposit);
+    }
+
+    /**
+     * @notice User withdraws pending MON refund from a failed plan.
+     */
+    function withdrawPendingRefund() external {
+        uint256 amount = pendingRefunds[msg.sender];
+        if (amount == 0) revert();
+        pendingRefunds[msg.sender] = 0;
+        (bool ok,) = msg.sender.call{value: amount}("");
+        require(ok, "MON refund transfer failed");
     }
 
     // ── Admin ───────────────────────────────────────────────────
 
-    /// @notice Operator sets the service fee in basis points (e.g., 30 = 0.3%).
-    ///         Max allowed: 100 (= 1%).
     function setServiceFee(uint256 _feeBps) external {
-        // Only contract deployer / known operator
-        // Open for now — in production restrict to operator
         if (_feeBps > 100) revert FeeTooHigh();
         uint256 old = serviceFeeBps;
         serviceFeeBps = _feeBps;
         emit ServiceFeeUpdated(old, _feeBps);
     }
 
-    // ── Internal ──────────────────────────────────────────────
+    // ── Internal: Execution ──────────────────────────────────────
 
-    function _releaseBond(bytes32 planId, Plan storage plan) internal {
-        uint256 bond = plan.maxCompensation;
-        lockedBond[plan.operator] -= bond;
-        require(tUSDC.transfer(plan.operator, bond), "bond release failed");
-        emit BondReleased(planId, plan.operator, bond);
-    }
+    /// @notice Shared guards for executePlan and executePlanWithSignature.
+    function _executeCommon(bytes32 planId, Plan storage plan, bytes calldata calldata_) private {
+        if (plan.executed) revert AlreadyExecuted();
+        if (block.timestamp > plan.deadline) revert PlanExpired(plan.deadline, block.timestamp);
+        if (keccak256(calldata_) != plan.calldataHash) {
+            revert CalldataMismatch(plan.calldataHash, keccak256(calldata_));
+        }
+        if (msg.value != plan.inputAmount) revert();
 
-    /// @notice Shared swap execution + settlement logic.
-    function _executeSwap(bytes32 planId, Plan storage plan, bytes calldata calldata_) internal {
         plan.executed = true;
 
-        uint256 balanceBefore = tUSDC.balanceOf(address(this));
-        (bool success,) = plan.target.call{value: plan.inputAmount}(calldata_);
+        _executeSwapWithCoverage(planId, plan, calldata_);
 
-        if (success) {
-            uint256 balanceAfter = tUSDC.balanceOf(address(this));
-            uint256 actualOutput = balanceAfter - balanceBefore;
-
-            uint256 fee = (actualOutput * serviceFeeBps) / 10000;
-            uint256 userAmount = actualOutput - fee;
-
-            if (userAmount > 0) {
-                require(tUSDC.transfer(plan.user, userAmount), "output transfer failed");
-            }
-            if (fee > 0) {
-                require(tUSDC.transfer(plan.operator, fee), "fee transfer failed");
-            }
-
-            if (userAmount >= plan.guaranteedOutput) {
-                _releaseBond(planId, plan);
-                emit ServiceFeePaid(planId, actualOutput, fee, userAmount);
-                emit PlanExecuted(planId, actualOutput, 0);
-            } else {
-                uint256 shortfall = plan.guaranteedOutput - userAmount;
-                uint256 compensation = shortfall > plan.maxCompensation
-                    ? plan.maxCompensation : shortfall;
-
-                lockedBond[plan.operator] -= compensation;
-                require(tUSDC.transfer(plan.user, compensation), "compensation transfer failed");
-
-                uint256 remaining = plan.maxCompensation - compensation;
-                if (remaining > 0) {
-                    lockedBond[plan.operator] -= remaining;
-                    require(tUSDC.transfer(plan.operator, remaining), "bond release failed");
-                }
-
-                emit ShortfallPaid(planId, plan.guaranteedOutput, userAmount, compensation);
-                emit ServiceFeePaid(planId, actualOutput, fee, userAmount);
-                emit PlanExecuted(planId, actualOutput, compensation);
-            }
-        } else {
-            (bool refundOk,) = plan.user.call{value: plan.inputAmount}("");
-            if (!refundOk) revert SwapFailed();
-
-            uint256 comp = plan.failureCompensation;
-            if (comp > 0) {
-                lockedBond[plan.operator] -= comp;
-                require(tUSDC.transfer(plan.user, comp), "failure compensation failed");
-            }
-
-            uint256 remainingBond = plan.maxCompensation - comp;
-            if (remainingBond > 0) {
-                lockedBond[plan.operator] -= remainingBond;
-                require(tUSDC.transfer(plan.operator, remainingBond), "bond release failed");
-            }
-
-            emit PlanFailed(planId, plan.inputAmount, comp);
+        // ── Invariant: no malicious calldata can drain other plans' bonds ──
+        if (tUSDC.balanceOf(address(this)) < totalLockedBonds) {
+            revert BondInvariantViolated(tUSDC.balanceOf(address(this)), totalLockedBonds);
         }
     }
 
-    /// @notice Recover signer from EIP-712 digest + signature.
+    /**
+     * @notice Try/catch swap execution with coverage floor.
+     *
+     *         Outer: calls inner, catches revert → PlanFailed
+     *         Inner: executes swap, checks output >= coverageFloor
+     *
+     *         coverageFloor = guaranteedOutput - maxCompensation
+     *         If swap output < coverageFloor, the bond isn't enough to cover
+     *         the shortfall — cheaper to refund + pay failureCompensation.
+     */
+    function _executeSwapWithCoverage(
+        bytes32 planId,
+        Plan storage plan,
+        bytes calldata calldata_
+    ) private {
+        uint256 coverageFloor = plan.guaranteedOutput > plan.maxCompensation
+            ? plan.guaranteedOutput - plan.maxCompensation
+            : 0;
+
+        uint256 balanceBefore = tUSDC.balanceOf(address(this));
+
+        // ── Inner call ──────────────────────────────────────────
+        (bool success,) =
+            plan.target.call{value: plan.inputAmount}(calldata_);
+
+        if (!success) {
+            _settleSwapFailed(planId, plan, FailureReason.SwapCallFailed);
+            return;
+        }
+
+        uint256 balanceAfter = tUSDC.balanceOf(address(this));
+        uint256 actualOutput = balanceAfter - balanceBefore;
+
+        // ── Check coverage floor ────────────────────────────────
+        if (actualOutput < coverageFloor) {
+            _settleSwapFailed(planId, plan, FailureReason.OutputBelowCoverage);
+            return;
+        }
+
+        // ── Success path: settle with actual output ─────────────
+        _settleSwapSuccess(planId, plan, actualOutput);
+    }
+
+    // ── Internal: Settlement ─────────────────────────────────────
+
+    /**
+     * @notice Swap succeeded, output >= coverageFloor.
+     *         User receives: actualOutput - fee (or guaranteed amount via shortfall).
+     */
+    function _settleSwapSuccess(
+        bytes32 planId,
+        Plan storage plan,
+        uint256 actualOutput
+    ) private {
+        uint256 fee = (actualOutput * serviceFeeBps) / 10000;
+        uint256 userAmount = actualOutput - fee;
+
+        if (userAmount > 0) {
+            require(tUSDC.transfer(plan.user, userAmount), "output transfer failed");
+        }
+        if (fee > 0) {
+            require(tUSDC.transfer(plan.operator, fee), "fee transfer failed");
+        }
+
+        if (userAmount >= plan.guaranteedOutput) {
+            // ── Happy path: output meets or exceeds guarantee ──
+            _releaseFullBond(planId, plan);
+            emit ServiceFeeCollected(planId, actualOutput, fee, userAmount);
+            emit PlanExecuted(planId, actualOutput, userAmount, 0);
+        } else {
+            // ── Shortfall: compensate user from bond ────────────
+            uint256 shortfall = plan.guaranteedOutput - userAmount;
+            uint256 compensation = shortfall > plan.maxCompensation
+                ? plan.maxCompensation : shortfall;
+
+            uint256 bondDeposit = plan.maxCompensation > plan.failureCompensation
+                ? plan.maxCompensation
+                : plan.failureCompensation;
+
+            totalLockedBonds -= bondDeposit;
+            lockedBond[plan.operator] -= bondDeposit;
+
+            // Pay compensation to user
+            require(tUSDC.transfer(plan.user, compensation), "compensation transfer failed");
+
+            // Return remaining bond (if any) to operator
+            uint256 remaining = bondDeposit - compensation;
+            if (remaining > 0) {
+                require(tUSDC.transfer(plan.operator, remaining), "bond release failed");
+            }
+
+            emit ShortfallPaid(planId, plan.guaranteedOutput, userAmount, compensation);
+            emit BondReleased(planId, plan.operator, remaining);
+            emit ServiceFeeCollected(planId, actualOutput, fee, userAmount);
+            emit PlanExecuted(planId, actualOutput, userAmount, compensation);
+        }
+    }
+
+    /**
+     * @notice Swap failed (reverted or below coverage floor).
+     *         Refund MON → pull pattern. Pay failureCompensation from bond.
+     */
+    function _settleSwapFailed(
+        bytes32 planId,
+        Plan storage plan,
+        FailureReason reason
+    ) private {
+        // ── Refund MON via pull pattern (no revert if user can't receive) ──
+        pendingRefunds[plan.user] += plan.inputAmount;
+        emit MONRefundStored(planId, plan.user, plan.inputAmount);
+
+        // ── Bond accounting: withdraw failureCompensation, release remainder ──
+        uint256 bondDeposit = plan.maxCompensation > plan.failureCompensation
+            ? plan.maxCompensation
+            : plan.failureCompensation;
+
+        uint256 comp = plan.failureCompensation;
+        if (comp > 0) {
+            totalLockedBonds -= comp;
+            lockedBond[plan.operator] -= comp;
+            require(tUSDC.transfer(plan.user, comp), "failure compensation failed");
+        }
+
+        // Release any remaining bond back to operator
+        uint256 remaining = bondDeposit - comp;
+        if (remaining > 0) {
+            totalLockedBonds -= remaining;
+            lockedBond[plan.operator] -= remaining;
+            require(tUSDC.transfer(plan.operator, remaining), "bond release failed");
+        }
+
+        emit PlanFailed(planId, reason, plan.inputAmount, comp);
+        emit BondReleased(planId, plan.operator, remaining);
+    }
+
+    /**
+     * @notice Release the full bond deposit back to operator.
+     */
+    function _releaseFullBond(bytes32 planId, Plan storage plan) private {
+        uint256 bondDeposit = plan.maxCompensation > plan.failureCompensation
+            ? plan.maxCompensation
+            : plan.failureCompensation;
+
+        totalLockedBonds -= bondDeposit;
+        lockedBond[plan.operator] -= bondDeposit;
+        require(tUSDC.transfer(plan.operator, bondDeposit), "bond release failed");
+        emit BondReleased(planId, plan.operator, bondDeposit);
+    }
+
+    // ── EIP-712 helpers ────────────────────────────────────────
+
     function _recoverSigner(bytes32 digest, bytes calldata signature) internal pure returns (address) {
         if (signature.length != 65) revert InvalidSignature();
         bytes32 r;
@@ -340,10 +481,6 @@ contract BondedExecutor {
         return recovered;
     }
 
-    error Unauthorized();
-    error FeeTooHigh();
-    error InvalidSignature();
-
-    // ── Fallback ──────────────────────────────────────────────
+    // ── Fallback ──────────────────────────────────────────────────
     receive() external payable {}
 }

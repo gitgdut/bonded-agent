@@ -12,7 +12,7 @@ import type { Plan } from "@/lib/types";
 function eip712Domain(verifyingContract: string, chainId: number) {
   return {
     name: "BondedExecutor",
-    version: "1",
+    version: "2",
     chainId,
     verifyingContract: verifyingContract as `0x${string}`,
   } as const;
